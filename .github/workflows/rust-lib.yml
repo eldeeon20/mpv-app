@@ -167,8 +167,16 @@ jobs:
   windows:
     name: rust-windows
     runs-on: windows-latest
+    # rust/src/frb_generated.rs esta gitignoreado: lo genera el job android.
+    needs: [android]
     steps:
       - uses: actions/checkout@v5
+
+      - name: Bajar bindings FRB (frb_generated.rs)
+        uses: actions/download-artifact@v5
+        with:
+          name: frb-bindings
+          path: .
 
       - uses: dtolnay/rust-toolchain@stable
 
