@@ -86,8 +86,7 @@ class PreviewMolde {
       if (frames.isEmpty) return b;
       final img = frames.first.image;
       try {
-        final data =
-            await img.toByteData(format: ui.ImageByteFormat.png);
+        final data = await img.toByteData(format: ui.ImageByteFormat.png);
         final out = data?.buffer.asUint8List();
         if (out == null || out.isEmpty) return b;
         return Uint8List.fromList(out);
@@ -131,8 +130,7 @@ Future<Uint8List?> _achicarUi(ui.Image src, int ancho) async {
     final pic = rec.endRecording();
     final out = await pic.toImage(ancho, alto);
     try {
-      final data =
-          await out.toByteData(format: ui.ImageByteFormat.png);
+      final data = await out.toByteData(format: ui.ImageByteFormat.png);
       final b = data?.buffer.asUint8List();
       if (b == null || b.isEmpty) return null;
       return Uint8List.fromList(b);
@@ -151,32 +149,39 @@ Future<Uint8List?> _achicarUi(ui.Image src, int ancho) async {
 /// El original nunca se modifica.
 /// (Sin encoder jpeg a mano: `ImageByteFormat` no tiene jpeg.)
 Future<List<Uint8List>> _previaImagen(String ruta) async {
+  ui.ImmutableBuffer? buffer;
+  ui.Codec? codec;
   try {
-    final bytes = await File(ruta).readAsBytes();
-    if (bytes.isEmpty) return [];
-    // Origen AVIF: libavif + achique directo (sin rodeos).
-    if (PreviewMolde.esAvif(bytes)) {
+    final archivo = File(ruta);
+    final tamano = await archivo.length();
+    if (tamano == 0) return [];
+    final extension = ruta.split('.').last.toLowerCase();
+    // flutter_avif decodes a byte array. Bound this fallback so a very
+    // large AVIF cannot duplicate the source file in the Dart heap.
+    if (extension == 'avif') {
+      if (tamano > 32 * 1024 * 1024) return [];
+      final bytes = await archivo.readAsBytes();
       try {
         final fs = await decodeAvif(bytes);
         if (fs.isEmpty) return [];
         final chica = await _achicarUi(fs.first.image, 320);
-        try {
-          fs.first.image.dispose();
-        } catch (_) {}
+        for (final frame in fs) {
+          frame.image.dispose();
+        }
         if (chica == null || chica.isEmpty) return [];
         return [await PreviewMolde.aAvif(chica)];
       } catch (_) {
         return [];
       }
     }
-    final codec = await ui.instantiateImageCodec(
-      bytes,
+    buffer = await ui.ImmutableBuffer.fromFilePath(ruta);
+    codec = await ui.instantiateImageCodecFromBuffer(
+      buffer,
       targetWidth: 320,
     );
     final frame = await codec.getNextFrame();
     try {
-      final data = await frame.image
-          .toByteData(format: ui.ImageByteFormat.png);
+      final data = await frame.image.toByteData(format: ui.ImageByteFormat.png);
       final b = data?.buffer.asUint8List();
       if (b == null || b.isEmpty) return [];
       // Solo la previa va en AVIF; el original no se toca.
@@ -187,6 +192,9 @@ Future<List<Uint8List>> _previaImagen(String ruta) async {
     }
   } catch (_) {
     return [];
+  } finally {
+    codec?.dispose();
+    buffer?.dispose();
   }
 }
 
@@ -214,13 +222,11 @@ class CapturaVideo {
       await player.open(Media(ruta));
       final dur = await player.stream.duration
           .firstWhere((d) => d > Duration.zero)
-          .timeout(const Duration(seconds: 15),
-              onTimeout: () => Duration.zero);
+          .timeout(const Duration(seconds: 15), onTimeout: () => Duration.zero);
       if (dur <= Duration.zero) return fuera;
       final ancho = await player.stream.width
           .firstWhere((w) => (w ?? 0) > 0)
-          .timeout(const Duration(seconds: 15),
-              onTimeout: () => 0);
+          .timeout(const Duration(seconds: 15), onTimeout: () => 0);
       if ((ancho ?? 0) <= 0) return fuera;
       for (var i = 0; i < tope; i++) {
         final t = dur * (i + 1) ~/ (tope + 1);

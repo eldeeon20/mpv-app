@@ -3,12 +3,75 @@ import 'package:flutter/material.dart';
 import '../modo_sql/mediablock_screen.dart';
 
 /// Inicio de la app: almacenamiento de MediaBlock y sus previas.
-class HomePage extends StatelessWidget {
+class HomePage extends StatefulWidget {
   const HomePage({super.key});
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  final _navigationRequest = ValueNotifier<int>(-1);
+
+  void _navigate(int tab) {
+    Navigator.of(context).pop();
+    _navigationRequest.value = -1;
+    _navigationRequest.value = tab;
+  }
+
+  @override
+  void dispose() {
+    _navigationRequest.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      drawer: Drawer(
+        child: SafeArea(
+          child: ListView(
+            padding: EdgeInsets.zero,
+            children: [
+              const DrawerHeader(
+                child: Align(
+                  alignment: Alignment.bottomLeft,
+                  child: Text(
+                    'MPV · almacenamiento',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.grid_view_rounded),
+                title: const Text('Previas'),
+                onTap: () => _navigate(0),
+              ),
+              ListTile(
+                leading: const Icon(Icons.folder_open_rounded),
+                title: const Text('Archivos'),
+                onTap: () => _navigate(1),
+              ),
+              ListTile(
+                leading: const Icon(Icons.inventory_2_outlined),
+                title: const Text('Moldes'),
+                onTap: () => _navigate(3),
+              ),
+              ListTile(
+                leading: const Icon(Icons.cloud_rounded),
+                title: const Text('Cuentas y servidores'),
+                subtitle: const Text('Telegram Bot · Hugging Face · TDLib'),
+                onTap: () => _navigate(5),
+              ),
+              ListTile(
+                leading: const Icon(Icons.tune_rounded),
+                title: const Text('Ajustes'),
+                onTap: () => _navigate(4),
+              ),
+            ],
+          ),
+        ),
+      ),
       body: DecoratedBox(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
@@ -26,8 +89,10 @@ class HomePage extends StatelessWidget {
           child: Column(
             children: [
               const _DriveHeader(),
-              const Expanded(
-                child: MediaBlockScreen(),
+              Expanded(
+                child: MediaBlockScreen(
+                  navigationRequest: _navigationRequest,
+                ),
               ),
             ],
           ),
@@ -48,6 +113,14 @@ class _DriveHeader extends StatelessWidget {
           width < 420 ? 16 : 24, 10, width < 420 ? 16 : 24, 12),
       child: Row(
         children: [
+          Builder(
+            builder: (context) => IconButton(
+              tooltip: 'Abrir menú',
+              onPressed: () => Scaffold.of(context).openDrawer(),
+              icon: const Icon(Icons.menu_rounded),
+            ),
+          ),
+          const SizedBox(width: 4),
           Container(
             width: 46,
             height: 46,
@@ -95,32 +168,6 @@ class _DriveHeader extends StatelessWidget {
                   style: TextStyle(
                     color: Color(0xFF9BAEC2),
                     fontSize: 11,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.055),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-            ),
-            child: const Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.lock_outline_rounded,
-                    size: 14, color: Color(0xFF67E8F9)),
-                SizedBox(width: 6),
-                Text(
-                  'PRIVADO',
-                  style: TextStyle(
-                    color: Color(0xFFD8E5F0),
-                    fontSize: 9,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.8,
                   ),
                 ),
               ],

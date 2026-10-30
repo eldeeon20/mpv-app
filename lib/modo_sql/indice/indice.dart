@@ -10,6 +10,30 @@ import 'package:sqlite3/sqlite3.dart';
 import '../db/caja_sql.dart';
 import '../media_server/media_server.dart';
 
+class CuentaNube {
+  final String id;
+  final String proveedor;
+  final String nombre;
+  final String destino;
+  final String token;
+
+  const CuentaNube({
+    required this.id,
+    required this.proveedor,
+    required this.nombre,
+    required this.destino,
+    required this.token,
+  });
+
+  factory CuentaNube.fromRow(Map<String, Object?> row) => CuentaNube(
+        id: '${row['account_id'] ?? ''}',
+        proveedor: '${row['provider'] ?? ''}',
+        nombre: '${row['name'] ?? ''}',
+        destino: '${row['destination'] ?? ''}',
+        token: '${row['secret'] ?? ''}',
+      );
+}
+
 /// ÍNDICE en SQL de verdad (`indice.db` en Download) con SU PROPIA
 /// CLAVE: el archivo va cifrado entero con sqlite3mc ChaCha20 y el
 /// cifrado es transparente por página — jamás hay nada descifrado
@@ -69,6 +93,11 @@ class Indice {
     db.execute('CREATE TABLE IF NOT EXISTS indice_hf(repo TEXT, token TEXT);');
     db.execute(
         'CREATE TABLE IF NOT EXISTS telegram_bot_config(token TEXT, chat_id TEXT);');
+    db.execute('CREATE TABLE IF NOT EXISTS cloud_accounts('
+        'account_id TEXT PRIMARY KEY, provider TEXT NOT NULL, name TEXT NOT NULL, '
+        'destination TEXT NOT NULL, secret TEXT NOT NULL);');
+    db.execute('CREATE TABLE IF NOT EXISTS config_migrations('
+        'migration TEXT PRIMARY KEY);');
     db.execute('CREATE TABLE IF NOT EXISTS telegram_user_config('
         'api_id TEXT, api_hash TEXT, database_key TEXT);');
     db.execute('CREATE TABLE IF NOT EXISTS indice_telegram('
@@ -81,6 +110,7 @@ class Indice {
         '${row['name']}': true,
     };
     for (final col in {
+      'account_id': 'TEXT',
       'sql_file_id': 'TEXT',
       'sql_message_id': 'INTEGER',
       'sql_size': 'INTEGER',
@@ -483,6 +513,143 @@ class Indice {
     }
   }
 
+  static Future<List<CuentaNube>> cuentasNube(String pass) async {
+    final caja = await _caja(pass);
+    try {
+      _tabla(caja.db);
+      final migrated = caja.db.select(
+        'SELECT migration FROM config_migrations WHERE migration = ?;',
+        ['cloud_accounts_v1'],
+      );
+      if (migrated.isEmpty) {
+        final bot = caja.db.select(
+          'SELECT token, chat_id FROM telegram_bot_config LIMIT 1;',
+        );
+        if (bot.isNotEmpty &&
+            '${bot.first['token'] ?? ''}'.isNotEmpty &&
+            '${bot.first['chat_id'] ?? ''}'.isNotEmpty) {
+          caja.db.execute(
+            'INSERT OR IGNORE INTO cloud_accounts'
+            '(account_id, provider, name, destination, secret) '
+            'VALUES (?, ?, ?, ?, ?);',
+            [
+              'telegram_bot_legacy',
+              'telegram_bot',
+              'Bot Telegram anterior',
+              '${bot.first['chat_id']}',
+              '${bot.first['token']}',
+            ],
+          );
+        }
+        final hf = caja.db.select(
+          'SELECT DISTINCT hf_repo, hf_token FROM indice '
+          "WHERE COALESCE(hf_repo, '') != '' "
+          "AND COALESCE(hf_token, '') != '';",
+        );
+        for (final row in hf) {
+          final repo = '${row['hf_repo']}';
+          final token = '${row['hf_token']}';
+          final id = 'hf_legacy_${base64Url.encode(utf8.encode(repo))}';
+          caja.db.execute(
+            'INSERT OR IGNORE INTO cloud_accounts'
+            '(account_id, provider, name, destination, secret) '
+            'VALUES (?, ?, ?, ?, ?);',
+            [id, 'huggingface', repo, repo, token],
+          );
+        }
+        caja.db.execute(
+          'INSERT INTO config_migrations(migration) VALUES (?);',
+          ['cloud_accounts_v1'],
+        );
+      }
+      return [
+        for (final row in caja.db.select(
+          'SELECT account_id, provider, name, destination, secret '
+          'FROM cloud_accounts ORDER BY provider, name;',
+        ))
+          CuentaNube.fromRow(row)
+      ];
+    } finally {
+      caja.cerrar();
+    }
+  }
+
+  static Future<String> guardarCuentaNube({
+    required String pass,
+    required String provider,
+    required String name,
+    required String destination,
+    required String secret,
+    String? id,
+  }) async {
+    if (!{'telegram_bot', 'huggingface'}.contains(provider)) {
+      throw ArgumentError.value(provider, 'provider', 'Proveedor inválido');
+    }
+    if (name.trim().isEmpty ||
+        destination.trim().isEmpty ||
+        secret.trim().isEmpty) {
+      throw ArgumentError('Nombre, destino y credencial son obligatorios');
+    }
+    final accountId = id ??
+        '${provider}_${DateTime.now().microsecondsSinceEpoch}_'
+            '${Random.secure().nextInt(1 << 32).toRadixString(16)}';
+    final caja = await _caja(pass);
+    try {
+      _tabla(caja.db);
+      caja.db.execute(
+        'INSERT OR REPLACE INTO cloud_accounts'
+        '(account_id, provider, name, destination, secret) VALUES (?, ?, ?, ?, ?);',
+        [
+          accountId,
+          provider,
+          name.trim(),
+          destination.trim(),
+          secret.trim(),
+        ],
+      );
+    } finally {
+      caja.cerrar();
+    }
+    return accountId;
+  }
+
+  static Future<void> quitarCuentaNube({
+    required String pass,
+    required String id,
+  }) async {
+    final caja = await _caja(pass);
+    try {
+      _tabla(caja.db);
+      final referencias = caja.db.select(
+        'SELECT nombre FROM indice_telegram WHERE account_id = ? LIMIT 1;',
+        [id],
+      );
+      if (referencias.isNotEmpty) {
+        throw StateError(
+          'La cuenta está asociada al molde "${referencias.first['nombre']}". '
+          'No se puede quitar mientras ese respaldo dependa de ella.',
+        );
+      }
+      caja.db.execute(
+        'DELETE FROM cloud_accounts WHERE account_id = ?;',
+        [id],
+      );
+    } finally {
+      caja.cerrar();
+    }
+  }
+
+  static Future<CuentaNube?> cuentaNube({
+    required String pass,
+    required String id,
+  }) async {
+    final cuentas = await cuentasNube(pass);
+    for (final cuenta in cuentas) {
+      if (cuenta.id == id) return cuenta;
+    }
+    return null;
+  }
+
   static Future<({String token, String chatId})> botTelegram(
       String pass) async {
     final caja = await _caja(pass);
@@ -503,6 +670,7 @@ class Indice {
   static Future<void> guardarManifiestoTelegram({
     required String pass,
     required String nombre,
+    String accountId = '',
     required String chatId,
     required String fileId,
     required int messageId,
@@ -515,12 +683,13 @@ class Indice {
     try {
       caja.db.execute(
         'INSERT OR REPLACE INTO indice_telegram('
-        'nombre, modo, chat_id, manifest_file_id, manifest_message_id, '
+        'nombre, modo, account_id, chat_id, manifest_file_id, manifest_message_id, '
         'mld_size, sql_file_id, sql_message_id, sql_size, updated_at) '
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);',
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);',
         [
           nombre,
           'bot',
+          accountId,
           chatId,
           fileId,
           messageId,
@@ -543,7 +712,7 @@ class Indice {
     final caja = await _caja(pass);
     try {
       final rows = caja.db.select(
-        'SELECT modo, chat_id, manifest_file_id, manifest_message_id, '
+        'SELECT modo, account_id, chat_id, manifest_file_id, manifest_message_id, '
         'mld_size, sql_file_id, sql_message_id, sql_size, updated_at '
         'FROM indice_telegram WHERE nombre = ?;',
         [nombre],
@@ -552,6 +721,7 @@ class Indice {
       final row = rows.first;
       return {
         'modo': '${row['modo'] ?? ''}',
+        'account_id': '${row['account_id'] ?? ''}',
         'chat_id': '${row['chat_id'] ?? ''}',
         'manifest_file_id': '${row['manifest_file_id'] ?? ''}',
         'manifest_message_id': (row['manifest_message_id'] as int?) ?? 0,

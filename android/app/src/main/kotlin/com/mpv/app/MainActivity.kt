@@ -1,4 +1,4 @@
-package com.example.pr_app
+package com.mpv.app
 
 import android.os.Build
 import android.os.Bundle

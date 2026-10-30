@@ -237,15 +237,30 @@ class CreateMoldeSql {
     }
 
     final destino = await MediaBase.archivoMolde(nombre);
-    if (await destino.exists()) await destino.delete();
+    if (await destino.exists()) {
+      throw StateError(
+        'mediablock: ya existe el archivo del molde "${destino.path}"',
+      );
+    }
+    final cajaInicial = await abrirIndice(claveSql: clave, molde: nombre);
+    try {
+      if (cajaInicial.uno(MediaBase.tablaMoldes, 'nombre = ?', [nombre]) !=
+          null) {
+        throw StateError(
+          'mediablock: el molde "$nombre" ya existe (borralo)',
+        );
+      }
+    } finally {
+      cajaInicial.cerrar();
+    }
+    final temporal = File(
+      '${destino.path}.building_${DateTime.now().microsecondsSinceEpoch}',
+    );
     final sal = Duro.nuevaSal();
     var offset = 0;
     final filas = <Map<String, Object?>>[];
     var conPrevias = 0;
-    // Previas: se juntan acá y se generan en paralelo después
-    // (serial = un video frena todo); se anexan al final.
-    final prevPend = <_PrevPend>[];
-    final waf = destino.openSync(mode: FileMode.write);
+    await temporal.create(recursive: true);
     try {
       var idx = 0;
       for (final f in fuentes) {
@@ -264,24 +279,16 @@ class CreateMoldeSql {
           nombre: nombreRel,
           salHex: sal,
         );
-        // Archivo cifrado en HILO (el UI solo escribe al .mld).
-        final paquetes = await Duro.cifrarArchivoHilo(
+        await Duro.cifrarArchivoADiscoHilo(
           claveArchivo: claveArchivo,
           trozoClaro: trozoClaro,
-          ruta: f.path,
+          origen: f.path,
+          destino: temporal.path,
+          tamanoEsperado: tam,
         );
-        var escritos = 0;
-        for (final paquete in paquetes) {
-          waf.writeFromSync(paquete);
-          escritos += paquete.length - Duro.overhead;
-        }
-        if (escritos != tam) {
-          throw StateError('mediablock: "$nombreRel" cambió mientras se leía');
-        }
         final guardado = _largoGuardado(tam, trozoClaro);
         final tagsF = porArchivo[nombreRel] ?? comunes;
-        // En bruto: la SQL ya va cifrada entera, sin cifrado manual.
-        final fila = MediaBase.filaArchivo(
+        filas.add(MediaBase.filaArchivo(
           molde: nombre,
           nombre: nombreRel,
           formato: _formato(nombreRel),
@@ -291,121 +298,97 @@ class CreateMoldeSql {
           fecha: fecha,
           tags: tagsF,
           trozo: trozoClaro,
-        );
-        filas.add(fila);
-        offset += guardado;
-        prevPend.add(_PrevPend(
-          ruta: f.path,
-          nombreRel: nombreRel,
-          formato: _formato(nombreRel),
-          claveArchivo: claveArchivo,
-          fecha: fecha,
         ));
-      }
-    } finally {
-      try {
-        waf.closeSync();
-      } catch (_) {}
-    }
-    // Previas en paralelo (de a 4) + anexado serial al .mld.
-    // Se guardan cifradas (misma clave del archivo) e indexadas
-    // en la SQL; el grid las muestra sin abrir el original.
-    // Los videos van en SERIE y en tiempo real: avisar antes.
-    try {
-      if (prevPend.isNotEmpty) {
-        final nVid =
-            prevPend.where((p) => PreviewMolde.esVideo(p.formato)).length;
-        log?.call('· previas: ${prevPend.length} archivos'
-            '${nVid > 0 ? ' ($nVid videos, en tiempo real)' : ''}…');
-      }
-      final hechas = await _previasParalelo(prevPend, captura);
-      if (hechas.isNotEmpty) {
-        final app = destino.openSync(mode: FileMode.append);
+        offset += guardado;
         try {
-          for (var k = 0; k < hechas.length; k++) {
-            final pend = prevPend[k];
-            final previas = hechas[k];
-            if (previas.isEmpty) {
-              if (PreviewMolde.esVideo(pend.formato)) {
-                log?.call('⚠ sin previas de video: ${pend.nombreRel}');
-              }
-              continue;
-            }
-            conPrevias++;
-            for (var i = 0; i < previas.length; i++) {
-              final bytes = previas[i];
-              final nombrePrevia = PreviewMolde.entrada(pend.nombreRel, i);
-              final clavePrevia = await Duro.claveEntrada(
-                claveArchivo: pend.claveArchivo,
-                nombreEntrada: nombrePrevia,
+          final previas = await PreviewMolde.generar(
+            ruta: f.path,
+            formato: _formato(nombreRel),
+            captura: captura,
+          );
+          for (var i = 0; i < previas.length; i++) {
+            final bytes = previas[i];
+            final nombrePrevia = PreviewMolde.entrada(nombreRel, i);
+            final clavePrevia = await Duro.claveEntrada(
+              claveArchivo: claveArchivo,
+              nombreEntrada: nombrePrevia,
+            );
+            final tmpP = File(
+              '${Directory.systemTemp.path}/prev_'
+              '${DateTime.now().microsecondsSinceEpoch}_$i.tmp',
+            );
+            try {
+              await tmpP.writeAsBytes(bytes, flush: true);
+              await Duro.cifrarArchivoADiscoHilo(
+                claveArchivo: clavePrevia,
+                trozoClaro: trozoClaro,
+                origen: tmpP.path,
+                destino: temporal.path,
+                tamanoEsperado: bytes.length,
               );
-              final tmpP = File(
-                  '${Directory.systemTemp.path}/prev_${DateTime.now().microsecondsSinceEpoch}_$i.tmp');
-              try {
-                await tmpP.writeAsBytes(bytes, flush: true);
-                final ppacks = await Duro.cifrarArchivoHilo(
-                  claveArchivo: clavePrevia,
-                  trozoClaro: trozoClaro,
-                  ruta: tmpP.path,
-                );
-                var pesc = 0;
-                for (final p in ppacks) {
-                  app.writeFromSync(p);
-                  pesc += p.length - Duro.overhead;
-                }
-                if (pesc != bytes.length) continue;
-                final guardadoP = _largoGuardado(bytes.length, trozoClaro);
-                filas.add(MediaBase.filaArchivo(
-                  molde: nombre,
-                  nombre: nombrePrevia,
-                  formato: 'prev',
-                  tamano: bytes.length,
-                  inicio: offset,
-                  fin: offset + guardadoP,
-                  fecha: pend.fecha,
-                  tags: const [],
-                  trozo: trozoClaro,
-                ));
-                offset += guardadoP;
-              } finally {
-                try {
-                  if (await tmpP.exists()) await tmpP.delete();
-                } catch (_) {}
-              }
+              final guardadoP = _largoGuardado(bytes.length, trozoClaro);
+              filas.add(MediaBase.filaArchivo(
+                molde: nombre,
+                nombre: nombrePrevia,
+                formato: 'prev',
+                tamano: bytes.length,
+                inicio: offset,
+                fin: offset + guardadoP,
+                fecha: fecha,
+                tags: const [],
+                trozo: trozoClaro,
+              ));
+              offset += guardadoP;
+              conPrevias++;
+            } finally {
+              if (await tmpP.exists()) await tmpP.delete();
             }
           }
-        } finally {
-          try {
-            app.closeSync();
-          } catch (_) {}
+          if (previas.isEmpty && PreviewMolde.esVideo(_formato(nombreRel))) {
+            log?.call('⚠ sin previas de video: $nombreRel');
+          }
+        } catch (e) {
+          log?.call('✗ previa "$nombreRel": $e');
         }
       }
-    } catch (e) {
-      // Ruidoso: antes tragaba todo y el molde salía v1 sin aviso.
-      log?.call('✗ previas: $e');
-    }
-    final caja = await abrirIndice(claveSql: clave, molde: nombre);
-    try {
-      final ya = caja.uno(MediaBase.tablaMoldes, 'nombre = ?', [nombre]);
-      if (ya != null) {
-        throw StateError('mediablock: el molde "$nombre" ya existe (borralo)');
+      final caja = await abrirIndice(claveSql: clave, molde: nombre);
+      var movido = false;
+      try {
+        caja.db.execute('BEGIN IMMEDIATE;');
+        try {
+          if (caja.uno(MediaBase.tablaMoldes, 'nombre = ?', [nombre]) != null) {
+            throw StateError(
+              'mediablock: el molde "$nombre" ya existe (borralo)',
+            );
+          }
+          for (final fila in filas) {
+            caja.agregar(MediaBase.tablaArchivos, fila);
+          }
+          caja.agregar(MediaBase.tablaMoldes, {
+            'nombre': nombre,
+            'ruta': destino.path,
+            'semilla': '',
+            'fecha': DateTime.now().millisecondsSinceEpoch,
+            'total': offset,
+            'sal': sal,
+            'cifrado': 'gcm-c-entry-v2',
+          });
+          await temporal.rename(destino.path);
+          movido = true;
+          caja.db.execute('COMMIT;');
+        } catch (_) {
+          caja.db.execute('ROLLBACK;');
+          rethrow;
+        }
+      } catch (_) {
+        if (movido && await destino.exists()) await destino.delete();
+        rethrow;
+      } finally {
+        caja.cerrar();
       }
-      caja.agregarLote(MediaBase.tablaArchivos, filas);
-      caja.agregar(MediaBase.tablaMoldes, {
-        'nombre': nombre,
-        'ruta': destino.path,
-        'semilla': '',
-        'fecha': DateTime.now().millisecondsSinceEpoch,
-        'total': offset,
-        'sal': sal,
-        'cifrado': 'gcm-c-entry-v2',
-      });
       final hechoN = filas.length;
       final hechoTotal = offset;
       log?.call('· previas guardadas en $conPrevias archivo(s)');
-      try {
-        caja.cerrar();
-      } catch (_) {}
       if (passIndice != null && passIndice.isNotEmpty) {
         await Indice.registrar(
           pass: passIndice,
@@ -420,9 +403,7 @@ class CreateMoldeSql {
       }
       return hechoN;
     } finally {
-      try {
-        caja.cerrar();
-      } catch (_) {}
+      if (await temporal.exists()) await temporal.delete();
     }
   }
 
@@ -430,47 +411,6 @@ class CreateMoldeSql {
     if (tam <= 0) return 0;
     final n = (tam + trozo - 1) ~/ trozo;
     return tam + n * Duro.overhead;
-  }
-
-  /// Previas en paralelo (imágenes de a 4) + videos en SERIE.
-  /// Un solo Player compartido: 4 videos a la vez mezclan los frames
-  /// y varios moldes terminan con la misma previa. Orden preservado.
-  static Future<List<List<Uint8List>>> _previasParalelo(
-      List<_PrevPend> pends, CapturaVideo? captura) async {
-    final fuera =
-        List<List<Uint8List>>.filled(pends.length, const <Uint8List>[]);
-    // Videos primero, uno por vez (el Player es único).
-    for (var i = 0; i < pends.length; i++) {
-      if (!PreviewMolde.esVideo(pends[i].formato)) continue;
-      try {
-        fuera[i] = await PreviewMolde.generar(
-          ruta: pends[i].ruta,
-          formato: pends[i].formato,
-          captura: captura,
-        );
-      } catch (_) {
-        fuera[i] = const <Uint8List>[];
-      }
-    }
-    // Imágenes en paralelo de a 4 (hilos aislados, no se mezclan).
-    final idx = [
-      for (var i = 0; i < pends.length; i++)
-        if (!PreviewMolde.esVideo(pends[i].formato)) i
-    ];
-    for (var j = 0; j < idx.length; j += 4) {
-      final grupo = idx.sublist(j, (j + 4).clamp(0, idx.length));
-      final res = await Future.wait(
-        grupo.map((k) => PreviewMolde.generar(
-              ruta: pends[k].ruta,
-              formato: pends[k].formato,
-              captura: captura,
-            ).then<List<Uint8List>>((v) => v, onError: (_) => <Uint8List>[])),
-      );
-      for (var g = 0; g < grupo.length; g++) {
-        fuera[grupo[g]] = res[g];
-      }
-    }
-    return fuera;
   }
 
   static Future<void> borrar({
@@ -542,7 +482,7 @@ class CreateMoldeSql {
         por: 'inicio',
       );
       if (crudas.isEmpty) return [];
-      return _mapearFilas(
+      return await _mapearFilas(
           claveSql: claveSql, molde: molde, caja: caja, crudas: crudas);
     } finally {
       caja.cerrar();
@@ -572,7 +512,7 @@ class CreateMoldeSql {
         por: 'inicio',
       );
       if (crudas.isEmpty) return [];
-      return _mapearFilas(
+      return await _mapearFilas(
           claveSql: claveSql, molde: molde, caja: caja, crudas: crudas);
     } finally {
       caja.cerrar();
@@ -1337,20 +1277,4 @@ class CreateMoldeSql {
     if (p <= 0 || p == base.length - 1) return 'sinformato';
     return base.substring(p + 1).toLowerCase();
   }
-}
-
-/// Pendiente de previa: lo mínimo para generarla después en paralelo.
-class _PrevPend {
-  final String ruta;
-  final String nombreRel;
-  final String formato;
-  final Uint8List claveArchivo;
-  final int fecha;
-  _PrevPend({
-    required this.ruta,
-    required this.nombreRel,
-    required this.formato,
-    required this.claveArchivo,
-    required this.fecha,
-  });
 }

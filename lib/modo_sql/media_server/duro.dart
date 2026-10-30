@@ -71,17 +71,29 @@ class Duro {
         }));
   }
 
-  /// Cifra un archivo entero en HILO aparte (crear no tranca el UI).
-  /// Devuelve los paquetes listos para escribir al .mld.
-  static Future<List<Uint8List>> cifrarArchivoHilo({
+  /// Cifra en un isolate y agrega cada paquete al archivo de destino.
+  /// La memoria usada queda limitada a un trozo claro y uno cifrado.
+  static Future<int> cifrarArchivoADiscoHilo({
     required Uint8List claveArchivo,
     required int trozoClaro,
-    required String ruta,
+    required String origen,
+    required String destino,
+    required int tamanoEsperado,
   }) {
-    return Isolate.run(() => _cifrarArchivoHilo({
+    final origenAbs = File(origen).absolute.path;
+    final destinoAbs = File(destino).absolute.path;
+    final mismoArchivo = Platform.isWindows
+        ? origenAbs.toLowerCase() == destinoAbs.toLowerCase()
+        : origenAbs == destinoAbs;
+    if (mismoArchivo) {
+      throw ArgumentError('mediablock: origen y destino no pueden coincidir');
+    }
+    return Isolate.run(() => _cifrarArchivoADisco({
           'clave': claveArchivo,
           'trozo': trozoClaro,
-          'ruta': ruta,
+          'origen': origen,
+          'destino': destino,
+          'tamanoEsperado': tamanoEsperado,
         }));
   }
 
@@ -312,27 +324,42 @@ Future<Uint8List> _derivarHilo(Map<String, Object?> m) async {
   return Uint8List.fromList(await derivada.extractBytes());
 }
 
-/// Corre en el hilo aparte: lee el archivo y lo cifra ahí.
-Future<List<Uint8List>> _cifrarArchivoHilo(Map<String, Object?> m) async {
-  final raf = File(m['ruta'] as String).openSync(mode: FileMode.read);
+/// Procesa un archivo a la vez; nunca conserva la lista de paquetes cifrados.
+Future<int> _cifrarArchivoADisco(Map<String, Object?> m) async {
+  final entrada = File(m['origen'] as String).openSync(mode: FileMode.read);
+  RandomAccessFile? salida;
+  final tamanoEsperado = m['tamanoEsperado'] as int;
+  var procesado = 0;
   try {
-    final fuera = <Uint8List>[];
+    final archivoSalida =
+        File(m['destino'] as String).openSync(mode: FileMode.append);
+    salida = archivoSalida;
     var indice = 0;
     while (true) {
-      final trozo = raf.readSync(m['trozo'] as int);
+      final trozo = entrada.readSync(m['trozo'] as int);
       if (trozo.isEmpty) break;
-      fuera.add(await Duro.cifrarTrozo(
+      final paquete = await Duro.cifrarTrozo(
         claveArchivo: m['clave'] as Uint8List,
         indice: indice,
         claro: trozo,
-      ));
+      );
+      archivoSalida.writeFromSync(paquete);
+      procesado += trozo.length;
       indice++;
     }
-    return fuera;
+    if (procesado != tamanoEsperado) {
+      throw StateError(
+        'mediablock: archivo cambió mientras se leía '
+        '($procesado bytes leídos, $tamanoEsperado esperados)',
+      );
+    }
+    return procesado;
   } finally {
     try {
-      raf.closeSync();
-    } catch (_) {}
+      entrada.closeSync();
+    } finally {
+      salida?.closeSync();
+    }
   }
 }
 

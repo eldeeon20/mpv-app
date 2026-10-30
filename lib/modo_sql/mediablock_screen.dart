@@ -51,6 +51,7 @@ part 'mediablock/indice_moldes.dart';
 part 'mediablock/archivos.dart';
 part 'mediablock/hf_flujos.dart';
 part 'mediablock/hf_config.dart';
+part 'mediablock/cuentas.dart';
 
 /// MediaBlock: crear molde desde una carpeta (recursiva, todo
 /// cifrado en UN solo .mld), abrirlo, listar archivos y pedir rangos.
@@ -58,7 +59,9 @@ part 'mediablock/hf_config.dart';
 /// mixin agrupa una zona (previas, ajustes, escáner, CRUD de moldes,
 /// índice, archivos, flujos HF y config HF).
 class MediaBlockScreen extends StatefulWidget {
-  const MediaBlockScreen({super.key});
+  final ValueNotifier<int>? navigationRequest;
+
+  const MediaBlockScreen({super.key, this.navigationRequest});
 
   @override
   State<MediaBlockScreen> createState() => _MediaBlockScreenState();
@@ -124,16 +127,12 @@ class _MediaBlockScreenState extends State<MediaBlockScreen>
   final List<String> _log = [];
   bool _cargando = false;
 
-  /// HF: repo (dir/user) + token por molde + puente.
-  final _hfRepoCtrl = TextEditingController();
-  final _hfTokenCtrl = TextEditingController();
+  /// HF: SQL suelta para escanear.
   final _hfSqlCtrl = TextEditingController();
 
   /// HF del ÍNDICE: repo+token propios, independientes del molde.
   final _hfIndiceRepoCtrl = TextEditingController();
   final _hfIndiceTokenCtrl = TextEditingController();
-  final _telegramBotTokenCtrl = TextEditingController();
-  final _telegramBotChatCtrl = TextEditingController();
   final _telegramApiIdCtrl = TextEditingController();
   final _telegramApiHashCtrl = TextEditingController();
   final _telegramPhoneCtrl = TextEditingController();
@@ -204,6 +203,7 @@ class _MediaBlockScreenState extends State<MediaBlockScreen>
     _filtroT?.cancel();
     _tagFiltroCtrl.removeListener(_filtroCambio);
     _tabs.removeListener(_alCambiarTab);
+    widget.navigationRequest?.removeListener(_atenderNavegacion);
     _tabs.dispose();
     CajaSql.log = null;
     Indice.log = null;
@@ -214,17 +214,14 @@ class _MediaBlockScreenState extends State<MediaBlockScreen>
     _claveCtrl.dispose();
     _tagsCtrl.dispose();
     _filtroMoldesCtrl.dispose();
+    _adminScrollCtrl.dispose();
     _tagFiltroCtrl.dispose();
     _desdeCtrl.dispose();
     _hastaCtrl.dispose();
     _indiceCtrl.dispose();
-    _hfRepoCtrl.dispose();
-    _hfTokenCtrl.dispose();
     _hfSqlCtrl.dispose();
     _hfIndiceRepoCtrl.dispose();
     _hfIndiceTokenCtrl.dispose();
-    _telegramBotTokenCtrl.dispose();
-    _telegramBotChatCtrl.dispose();
     _telegramBot.close();
     _telegramApiIdCtrl.dispose();
     _telegramApiHashCtrl.dispose();
@@ -255,8 +252,9 @@ class _MediaBlockScreenState extends State<MediaBlockScreen>
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 5, vsync: this);
+    _tabs = TabController(length: 6, vsync: this);
     _tabs.addListener(_alCambiarTab);
+    widget.navigationRequest?.addListener(_atenderNavegacion);
     // Filtro de tag en vivo con debounce: sin esto solo filtraba
     // cuando otro rebuild lo arrastraba (ej. al abrir una imagen).
     _tagFiltroCtrl.addListener(_filtroCambio);
@@ -272,6 +270,13 @@ class _MediaBlockScreenState extends State<MediaBlockScreen>
       });
     });
     WidgetsBinding.instance.addPostFrameCallback((_) => _preguntarIndice());
+  }
+
+  void _atenderNavegacion() {
+    final tab = widget.navigationRequest?.value ?? -1;
+    if (tab < 0 || tab >= _tabs.length) return;
+    _tabs.animateTo(tab);
+    if (tab == 5) _refrescarCuentasNube();
   }
 
   /// Debounce de búsqueda de archivos/tags sobre las filas ya cargadas.
@@ -323,6 +328,8 @@ class _MediaBlockScreenState extends State<MediaBlockScreen>
 
   /// Filtro por nombre/carpeta en Moldes.
   final _filtroMoldesCtrl = TextEditingController();
+  List<CuentaNube> _cuentasNube = [];
+  final _adminScrollCtrl = ScrollController();
 
   /// Server mira el MOLDE, user mira la SQL: la SQL (tool) da info +
   /// filas y con eso se abre el server (sin pass SQL en el server).
@@ -356,6 +363,7 @@ class _MediaBlockScreenState extends State<MediaBlockScreen>
                 _tabCrear(),
                 _tabMoldes(),
                 _tabAdmin(),
+                _tabCuentas(),
               ],
             ),
           ),
@@ -402,6 +410,7 @@ class _MediaBlockScreenState extends State<MediaBlockScreen>
                           icon: Icon(Icons.inventory_2_outlined),
                           text: 'Moldes'),
                       Tab(icon: Icon(Icons.tune_rounded), text: 'Ajustes'),
+                      Tab(icon: Icon(Icons.cloud_rounded), text: 'Cuentas'),
                     ],
                   ),
                 ),
@@ -435,7 +444,9 @@ class _MediaBlockScreenState extends State<MediaBlockScreen>
 
   /// Al entrar a Admin se mide de verdad (antes nadie llamaba esto).
   void _alCambiarTab() {
+    if (_tabs.indexIsChanging) return;
     if (_tabs.index == 4) _medirCache();
+    if (_tabs.index == 5) _refrescarCuentasNube();
   }
 
   Future<void> _medirCache() async {
@@ -481,114 +492,127 @@ class _MediaBlockScreenState extends State<MediaBlockScreen>
   Widget _tabAdmin() {
     final lista = _entradas.values.toList()
       ..sort((a, b) => '${a['nombre']}'.compareTo('${b['nombre']}'));
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Cachés (sqlite cifradas, misma pass del índice)',
-                  style: TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 4),
-              Text('Trozos por molde: ${fmtBytes(_limiteTrozosKb * 1024)} '
-                  '(tope: memoria libre ${fmtBytes(_memLibreMb * 1024 * 1024)})'),
-              Slider(
-                min: 1024,
-                max: (_memLibreMb * 1024).toDouble(),
-                divisions: 40,
-                value: _limiteTrozosKb
-                    .toDouble()
-                    .clamp(1024, (_memLibreMb * 1024).toDouble()),
-                label: fmtBytes(_limiteTrozosKb * 1024),
-                onChanged: (v) {
-                  final tope = _memLibreMb * 1024;
-                  setState(() => _limiteTrozosKb = v.toInt().clamp(1024, tope));
-                  final c = _cache;
-                  if (c != null) c.limiteBytes = _limiteTrozosKb * 1024;
-                  _guardarAjustes();
-                },
+    return Scrollbar(
+      controller: _adminScrollCtrl,
+      thumbVisibility: true,
+      interactive: true,
+      child: SingleChildScrollView(
+        controller: _adminScrollCtrl,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Cachés (sqlite cifradas, misma pass del índice)',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  Text('Trozos por molde: ${fmtBytes(_limiteTrozosKb * 1024)} '
+                      '(tope: memoria libre ${fmtBytes(_memLibreMb * 1024 * 1024)})'),
+                  Slider(
+                    min: 1024,
+                    max: (_memLibreMb * 1024).toDouble(),
+                    divisions: 40,
+                    value: _limiteTrozosKb
+                        .toDouble()
+                        .clamp(1024, (_memLibreMb * 1024).toDouble()),
+                    label: fmtBytes(_limiteTrozosKb * 1024),
+                    onChanged: (v) {
+                      final tope = _memLibreMb * 1024;
+                      setState(
+                          () => _limiteTrozosKb = v.toInt().clamp(1024, tope));
+                      final c = _cache;
+                      if (c != null) c.limiteBytes = _limiteTrozosKb * 1024;
+                      _guardarAjustes();
+                    },
+                  ),
+                  Text(
+                      'Previas por molde: ${fmtBytes(_limitePreviasMb * 1024 * 1024)} '
+                      '(libres: miles de previas mínimas)'),
+                  Slider(
+                    min: 50,
+                    max: 8192,
+                    divisions: 80,
+                    value: _limitePreviasMb.toDouble().clamp(50, 8192),
+                    label: fmtBytes(_limitePreviasMb * 1024 * 1024),
+                    onChanged: (v) {
+                      setState(
+                          () => _limitePreviasMb = v.toInt().clamp(50, 8192));
+                      final p = _previaCache;
+                      if (p != null) {
+                        p.limiteBytes = _limitePreviasMb * 1024 * 1024;
+                      }
+                      _guardarAjustes();
+                    },
+                  ),
+                  Text(
+                      'Límite global: ${fmtBytes(_limiteGlobalMb * 1024 * 1024)} '
+                      '(evicta lo más viejo entre moldes al pasarlo)'),
+                  Slider(
+                    min: 100,
+                    max: 16384,
+                    divisions: 80,
+                    value: _limiteGlobalMb.toDouble().clamp(100, 16384),
+                    label: fmtBytes(_limiteGlobalMb * 1024 * 1024),
+                    onChanged: (v) {
+                      setState(
+                          () => _limiteGlobalMb = v.toInt().clamp(100, 16384));
+                      _guardarAjustes();
+                      _chequearGlobal();
+                    },
+                  ),
+                  const Text(
+                      'SQL a escanear (misma pass de moldes, sin pass por ruta)',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                  Row(children: [
+                    Expanded(
+                      child: Text(
+                          _sqlRutas.isEmpty
+                              ? 'Sin rutas extra (se escanean temp + carpeta de moldes)'
+                              : '${_sqlRutas.length} ruta(s): ${_sqlRutas.take(2).join(' · ')}${_sqlRutas.length > 2 ? ' …' : ''}',
+                          style: const TextStyle(fontSize: 12)),
+                    ),
+                    TextButton(
+                        onPressed: _editarSqlRutas,
+                        child: const Text('Editar')),
+                  ]),
+                  Text(
+                      _cacheTotalStr.isEmpty
+                          ? 'Total caché: sin medir (entrá a Admin para medir)'
+                          : _cacheTotalStr,
+                      style: const TextStyle(fontWeight: FontWeight.bold)),
+                  Text(_cacheResumen.isEmpty
+                      ? 'Sin medición todavía'
+                      : _cacheResumen),
+                  const Divider(height: 12),
+                ],
               ),
-              Text(
-                  'Previas por molde: ${fmtBytes(_limitePreviasMb * 1024 * 1024)} '
-                  '(libres: miles de previas mínimas)'),
-              Slider(
-                min: 50,
-                max: 8192,
-                divisions: 80,
-                value: _limitePreviasMb.toDouble().clamp(50, 8192),
-                label: fmtBytes(_limitePreviasMb * 1024 * 1024),
-                onChanged: (v) {
-                  setState(() => _limitePreviasMb = v.toInt().clamp(50, 8192));
-                  final p = _previaCache;
-                  if (p != null) {
-                    p.limiteBytes = _limitePreviasMb * 1024 * 1024;
-                  }
-                  _guardarAjustes();
-                },
-              ),
-              Text('Límite global: ${fmtBytes(_limiteGlobalMb * 1024 * 1024)} '
-                  '(evicta lo más viejo entre moldes al pasarlo)'),
-              Slider(
-                min: 100,
-                max: 16384,
-                divisions: 80,
-                value: _limiteGlobalMb.toDouble().clamp(100, 16384),
-                label: fmtBytes(_limiteGlobalMb * 1024 * 1024),
-                onChanged: (v) {
-                  setState(() => _limiteGlobalMb = v.toInt().clamp(100, 16384));
-                  _guardarAjustes();
-                  _chequearGlobal();
-                },
-              ),
-              const Text(
-                  'SQL a escanear (misma pass de moldes, sin pass por ruta)',
-                  style: TextStyle(fontWeight: FontWeight.bold)),
-              Row(children: [
-                Expanded(
-                  child: Text(
-                      _sqlRutas.isEmpty
-                          ? 'Sin rutas extra (se escanean temp + carpeta de moldes)'
-                          : '${_sqlRutas.length} ruta(s): ${_sqlRutas.take(2).join(' · ')}${_sqlRutas.length > 2 ? ' …' : ''}',
-                      style: const TextStyle(fontSize: 12)),
-                ),
-                TextButton(
-                    onPressed: _editarSqlRutas, child: const Text('Editar')),
-              ]),
-              Text(
-                  _cacheTotalStr.isEmpty
-                      ? 'Total caché: sin medir (entrá a Admin para medir)'
-                      : _cacheTotalStr,
-                  style: const TextStyle(fontWeight: FontWeight.bold)),
-              Text(_cacheResumen.isEmpty
-                  ? 'Sin medición todavía'
-                  : _cacheResumen),
-              const Divider(height: 12),
-            ],
-          ),
+            ),
+            PanelAdmin(
+              entradas: lista,
+              onMover: _moverMolde,
+              onEditarRutas: _editarRutas,
+              cacheBytes: _cacheBytes,
+              cacheResumen: _cacheResumen,
+              cacheLimiteKb: _limiteTrozosKb,
+              onVaciarCache: _vaciarCache,
+              suave: _suave,
+              onSuave: (v) => setState(() {
+                _suave = v;
+                _minis.maxEnVuelo = v ? 2 : 6;
+                // El tope RAM lo pone la memoria libre (suave recorta).
+                _aplicarTopeRam();
+                _minis.limpiar();
+              }),
+              hilosEnUso: _minis.enVuelo,
+              maxHilos: _minis.maxEnVuelo,
+              scrollable: false,
+            ),
+          ],
         ),
-        Expanded(
-          child: PanelAdmin(
-            entradas: lista,
-            onMover: _moverMolde,
-            onEditarRutas: _editarRutas,
-            cacheBytes: _cacheBytes,
-            cacheResumen: _cacheResumen,
-            cacheLimiteKb: _limiteTrozosKb,
-            onVaciarCache: _vaciarCache,
-            suave: _suave,
-            onSuave: (v) => setState(() {
-              _suave = v;
-              _minis.maxEnVuelo = v ? 2 : 6;
-              // El tope RAM lo pone la memoria libre (suave recorta).
-              _aplicarTopeRam();
-              _minis.limpiar();
-            }),
-            hilosEnUso: _minis.enVuelo,
-            maxHilos: _minis.maxEnVuelo,
-          ),
-        ),
-      ],
+      ),
     );
   }
 
@@ -609,6 +633,20 @@ class _MediaBlockScreenState extends State<MediaBlockScreen>
       conBorrar: false,
       // Pero SÍ muestran el árbol del índice (mover solo en Moldes).
       carpetas: _carpetaPorMolde,
+    );
+  }
+
+  Widget _campoBusquedaTags() {
+    return TextField(
+      controller: _tagFiltroCtrl,
+      style: const TextStyle(fontSize: 12),
+      decoration: const InputDecoration(
+        hintText: 'Buscar archivo o tag…',
+        prefixIcon: Icon(Icons.search_rounded, size: 20),
+        prefixIconConstraints: BoxConstraints(minWidth: 38, minHeight: 40),
+        isDense: true,
+        border: OutlineInputBorder(),
+      ),
     );
   }
 
@@ -657,7 +695,7 @@ class _MediaBlockScreenState extends State<MediaBlockScreen>
           const Text('Visor (tocá para pantalla completa)',
               style: TextStyle(fontWeight: FontWeight.bold)),
           const SizedBox(height: 6),
-          campoTexto(_tagFiltroCtrl, 'buscar archivo o tag…'),
+          _campoBusquedaTags(),
           const SizedBox(height: 6),
           migasRuta(
             molde: _infoAbierta!.nombre,
@@ -731,7 +769,7 @@ class _MediaBlockScreenState extends State<MediaBlockScreen>
                   ),
                 ]),
                 const SizedBox(height: 6),
-                campoTexto(_tagFiltroCtrl, 'buscar archivo o tag…'),
+                _campoBusquedaTags(),
               ],
             ),
           ),
@@ -878,13 +916,8 @@ class _MediaBlockScreenState extends State<MediaBlockScreen>
           }),
         ),
         const Divider(height: 20),
-        const Text('HuggingFace (repo + token del molde abierto)',
+        const Text('Subida del molde abierto',
             style: TextStyle(fontWeight: FontWeight.bold)),
-        const SizedBox(height: 6),
-        campoTexto(_hfRepoCtrl, 'repo dir/user (ej. miuser/mis-moldes)'),
-        const SizedBox(height: 6),
-        campoTexto(_hfTokenCtrl, 'token HF (write para subir)', oculto: true),
-        const SizedBox(height: 6),
         CheckboxListTile(
           dense: true,
           contentPadding: EdgeInsets.zero,
@@ -895,14 +928,14 @@ class _MediaBlockScreenState extends State<MediaBlockScreen>
         ),
         Wrap(spacing: 8, children: [
           FilledButton.tonalIcon(
-            onPressed: _hfOcupado ? null : _hfGuardar,
-            icon: const Icon(Icons.save_rounded, size: 18),
-            label: const Text('Guardar HF'),
-          ),
-          FilledButton.tonalIcon(
             onPressed: _hfOcupado ? null : _hfSubir,
             icon: const Icon(Icons.cloud_upload_rounded, size: 18),
-            label: const Text('Subir molde+SQL'),
+            label: const Text('Subir a Hugging Face'),
+          ),
+          FilledButton.tonalIcon(
+            onPressed: _telegramBotOcupado ? null : _telegramBotSubirMolde,
+            icon: const Icon(Icons.send_rounded, size: 18),
+            label: const Text('Subir a Telegram Bot'),
           ),
           FilledButton.tonalIcon(
             onPressed: _hfOcupado ? null : _hfBajarSql,
@@ -935,126 +968,6 @@ class _MediaBlockScreenState extends State<MediaBlockScreen>
             onPressed: _hfOcupado ? null : _hfBajarIndice,
             icon: const Icon(Icons.cloud_download_rounded, size: 18),
             label: const Text('Bajar índice'),
-          ),
-        ]),
-        const Divider(height: 20),
-        const Text('Telegram Bot API (subida automática por partes)',
-            style: TextStyle(fontWeight: FontWeight.bold)),
-        const SizedBox(height: 4),
-        const Text(
-          'El bot no permite buscar el historial. MediaBlock guarda las partes '
-          'de 17 MB y un hash.db cifrado con la clave del molde; index.db '
-          'conserva el file_id para encontrarlas. El .mld no se cifra otra vez.',
-          style: TextStyle(fontSize: 11),
-        ),
-        const SizedBox(height: 6),
-        campoTexto(_telegramBotTokenCtrl, 'token de BotFather', oculto: true),
-        const SizedBox(height: 6),
-        campoTexto(_telegramBotChatCtrl,
-            'chat ID (iniciá el bot o agregalo al grupo primero)'),
-        const SizedBox(height: 6),
-        Wrap(spacing: 8, children: [
-          FilledButton.tonalIcon(
-            onPressed: _telegramBotOcupado ? null : _telegramBotGuardar,
-            icon: const Icon(Icons.verified_user_rounded, size: 18),
-            label: const Text('Validar y guardar bot'),
-          ),
-          FilledButton.tonalIcon(
-            onPressed: _telegramBotOcupado ? null : _telegramBotSubirMolde,
-            icon: _telegramBotOcupado
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.cloud_upload_rounded, size: 18),
-            label: const Text('Subir molde por bot'),
-          ),
-        ]),
-        const Divider(height: 20),
-        const Text('Cuenta Telegram personal (TDLib)',
-            style: TextStyle(fontWeight: FontWeight.bold)),
-        const SizedBox(height: 4),
-        const Text(
-          'Esta cuenta usa Mensajes guardados para buscar y respaldar index.db. '
-          'En Android inicia sesión con teléfono, código y la clave 2FA si la '
-          'cuenta la solicita. Las credenciales y la clave TDLib quedan dentro '
-          'del index.db cifrado.',
-          style: TextStyle(fontSize: 11),
-        ),
-        const SizedBox(height: 6),
-        campoTexto(_telegramApiIdCtrl, 'API ID de my.telegram.org'),
-        const SizedBox(height: 6),
-        campoTexto(_telegramApiHashCtrl, 'API Hash', oculto: true),
-        const SizedBox(height: 6),
-        FilledButton.tonalIcon(
-          onPressed: _telegramCuentaGuardar,
-          icon: const Icon(Icons.login_rounded, size: 18),
-          label: const Text('Guardar credenciales e iniciar TDLib'),
-        ),
-        if (_telegramUserStep == TelegramUserAuthStep.waitingPhone) ...[
-          const SizedBox(height: 6),
-          campoTexto(_telegramPhoneCtrl, 'teléfono internacional (+...)'),
-          FilledButton.tonal(
-            onPressed: _telegramEnviarPasoAuth,
-            child: const Text('Enviar teléfono'),
-          ),
-        ],
-        if (_telegramUserStep == TelegramUserAuthStep.waitingCode) ...[
-          const SizedBox(height: 6),
-          campoTexto(_telegramCodeCtrl, 'código recibido de Telegram'),
-          FilledButton.tonal(
-            onPressed: _telegramEnviarPasoAuth,
-            child: const Text('Enviar código'),
-          ),
-        ],
-        if (_telegramUserStep == TelegramUserAuthStep.waitingPassword) ...[
-          const SizedBox(height: 6),
-          campoTexto(_telegramPasswordCtrl, 'contraseña 2FA', oculto: true),
-          FilledButton.tonal(
-            onPressed: _telegramEnviarPasoAuth,
-            child: const Text('Enviar contraseña'),
-          ),
-        ],
-        if (_telegramUserStep == TelegramUserAuthStep.ready)
-          const ListTile(
-            dense: true,
-            leading: Icon(Icons.verified_rounded, color: Colors.greenAccent),
-            title: Text('Cuenta Telegram autorizada'),
-            subtitle: Text('Preparando Mensajes guardados…'),
-          ),
-        if (_telegramUserError != null)
-          Text(
-            _telegramUserError!,
-            style: const TextStyle(color: Colors.redAccent, fontSize: 12),
-          ),
-        ListTile(
-          dense: true,
-          leading: Icon(
-            _telegramIndexPendiente
-                ? Icons.cloud_off_rounded
-                : Icons.cloud_done_rounded,
-            color: _telegramIndexPendiente
-                ? Colors.amberAccent
-                : Colors.greenAccent,
-          ),
-          title: Text(_telegramIndexPendiente
-              ? 'index.db: respaldo pendiente'
-              : 'index.db: respaldado'),
-          subtitle: Text(_telegramIndexPendiente
-              ? 'El último respaldo no contiene los cambios locales.'
-              : 'El hash local coincide con el último respaldo registrado.'),
-        ),
-        Wrap(spacing: 8, children: [
-          FilledButton.tonalIcon(
-            onPressed: _telegramUser.isReady ? _telegramSubirIndice : null,
-            icon: const Icon(Icons.backup_rounded, size: 18),
-            label: const Text('Respaldar index.db'),
-          ),
-          FilledButton.tonalIcon(
-            onPressed: _telegramUser.isReady ? _telegramBajarIndice : null,
-            icon: const Icon(Icons.restore_rounded, size: 18),
-            label: const Text('Restaurar último respaldo'),
           ),
         ]),
         const SizedBox(height: 6),

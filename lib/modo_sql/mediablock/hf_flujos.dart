@@ -6,8 +6,18 @@ extension HfFlujosExt on _MediaBlockScreenState {
   /// lo que ya está arriba). Log por molde + resumen.
   Future<void> _subirSeleccionados() async {
     if (_hfOcupado || _selSubir.isEmpty) return;
+    final cuenta = await _elegirCuentaNube('huggingface');
+    if (cuenta == null || !mounted) return;
     setState(() => _hfOcupado = true);
     try {
+      for (final nombre in _selSubir) {
+        await Indice.guardarHf(
+          pass: await _passIndice(),
+          nombre: nombre,
+          hfRepo: cuenta.destino,
+          hfToken: cuenta.token,
+        );
+      }
       final r = await _puenteHf.subirSeleccionados(
         passIndice: await _passIndice(),
         claveSql: _clave,
@@ -97,8 +107,16 @@ extension HfFlujosExt on _MediaBlockScreenState {
       _add('· HF: abrí un molde primero');
       return;
     }
+    final cuenta = await _elegirCuentaNube('huggingface');
+    if (cuenta == null || !mounted) return;
     setState(() => _hfOcupado = true);
     try {
+      await Indice.guardarHf(
+        pass: await _passIndice(),
+        nombre: m,
+        hfRepo: cuenta.destino,
+        hfToken: cuenta.token,
+      );
       await _puenteHf.subirMolde(
         passIndice: await _passIndice(),
         claveSql: _clave,
@@ -118,16 +136,16 @@ extension HfFlujosExt on _MediaBlockScreenState {
   /// El .mld nunca se baja: se consulta por rangos.
   Future<void> _hfBajarSql() async {
     if (_hfOcupado) return;
-    final m = _infoAbierta?.nombre ?? _hfRepoCtrl.text.trim();
-    if (m.isEmpty) {
-      _add('· HF: abrí un molde o poné su nombre en repo');
+    final m = _infoAbierta?.nombre;
+    if (m == null) {
+      _add('· abrí el molde que querés recuperar desde Hugging Face');
       return;
     }
     setState(() => _hfOcupado = true);
     try {
       final ruta = await _puenteHf.bajarSql(
         passIndice: await _passIndice(),
-        nombre: _infoAbierta?.nombre ?? m,
+        nombre: m,
       );
       _add('✓ SQL en $ruta');
       if (_infoAbierta == null && mounted) {
@@ -250,44 +268,18 @@ extension HfFlujosExt on _MediaBlockScreenState {
     }
   }
 
-  Future<void> _telegramBotGuardar() async {
-    final token = _telegramBotTokenCtrl.text.trim();
-    final chatId = _telegramBotChatCtrl.text.trim();
-    if (token.isEmpty || chatId.isEmpty) {
-      _add('· completá token del bot y chat destino');
-      return;
-    }
-    if (_telegramBotOcupado) return;
-    setState(() => _telegramBotOcupado = true);
-    try {
-      final username = await _telegramBot.validarBot(token);
-      await _telegramBot.validarDestino(token: token, chatId: chatId);
-      await Indice.guardarBotTelegram(
-        pass: await _passIndice(),
-        token: token,
-        chatId: chatId,
-      );
-      await _telegramActualizarEstadoIndice();
-      _add('✓ bot @$username y destino validados; configuración guardada '
-          'en index.db cifrado');
-    } catch (e) {
-      _add('✗ validar/guardar Bot API: $e');
-    } finally {
-      if (mounted) setState(() => _telegramBotOcupado = false);
-    }
-  }
-
   Future<void> _telegramBotSubirMolde() async {
     final nombre = _infoAbierta?.nombre;
     if (nombre == null) {
       _add('· abrí el molde que querés subir por Bot API');
       return;
     }
+    final cuenta = await _elegirCuentaNube('telegram_bot');
+    if (cuenta == null || !mounted) return;
     if (_telegramBotOcupado) return;
     setState(() => _telegramBotOcupado = true);
     try {
       final passIndice = await _passIndice();
-      final config = await Indice.botTelegram(passIndice);
       final ent = await Indice.entrada(pass: passIndice, nombre: nombre);
       if (ent == null) throw StateError('"$nombre" no está en index.db');
       final rutaMld = '${ent['mld_ruta'] ?? ''}';
@@ -295,16 +287,12 @@ extension HfFlujosExt on _MediaBlockScreenState {
       if (!await archivo.exists()) {
         throw StateError('No hay .mld local para subir: $rutaMld');
       }
-      if (config.token.isEmpty || config.chatId.isEmpty) {
-        throw StateError('configurá y validá el Bot API primero');
-      }
-
       _add('· subiendo "$nombre.mld" en partes de 17 MB; '
           'el archivo ya está cifrado y no se vuelve a cifrar');
       var ultimoProgreso = -1;
       final manifest = await _telegramBot.subirMolde(
-        token: config.token,
-        chatId: config.chatId,
+        token: cuenta.token,
+        chatId: cuenta.destino,
         ruta: rutaMld,
         progreso: (subidos, total) {
           final porcentaje = (100 * subidos / total).floor();
@@ -320,8 +308,8 @@ extension HfFlujosExt on _MediaBlockScreenState {
         manifest: manifest,
       );
       final subidaManifiesto = await _telegramBot.subirArchivo(
-        token: config.token,
-        chatId: config.chatId,
+        token: cuenta.token,
+        chatId: cuenta.destino,
         ruta: rutaManifiesto.path,
         nombre: '$nombre.hash.db',
       );
@@ -340,15 +328,16 @@ extension HfFlujosExt on _MediaBlockScreenState {
       await cajaSql.abrirRuta(rutaSql, clave: _clave);
       cajaSql.cerrar();
       final subidaSql = await _telegramBot.subirArchivo(
-        token: config.token,
-        chatId: config.chatId,
+        token: cuenta.token,
+        chatId: cuenta.destino,
         ruta: rutaSql,
         nombre: '$nombre.sql.db',
       );
       await Indice.guardarManifiestoTelegram(
         pass: passIndice,
         nombre: nombre,
-        chatId: config.chatId,
+        accountId: cuenta.id,
+        chatId: cuenta.destino,
         fileId: subidaManifiesto.fileId,
         messageId: subidaManifiesto.messageId,
         size: manifest.size,

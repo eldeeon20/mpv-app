@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.pr_app"
+    namespace = "com.mpv.app"
     compileSdk = 36
     ndkVersion = "27.0.12077973"
 
@@ -21,7 +21,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.pr_app"
+        applicationId = "com.mpv.app"
         // 26 (Android 8): lutimes() que usa unrar_sys (RAR de unarc-rs) solo
         // existe en bionic desde API 26; con minSdk menor el sysroot oculta
         // el símbolo y el build nativo falla en ulinks.cpp.

@@ -201,7 +201,13 @@ extension IndiceMoldesExt on _MediaBlockScreenState {
         );
         if ('${teleMeta?['modo'] ?? ''}' == 'bot' &&
             '${teleMeta?['sql_file_id'] ?? ''}'.isNotEmpty) {
-          final config = await Indice.botTelegram(pi);
+          final accountId = '${teleMeta?['account_id'] ?? ''}';
+          final account = accountId.isEmpty
+              ? null
+              : await Indice.cuentaNube(pass: pi, id: accountId);
+          final config = account == null
+              ? await Indice.botTelegram(pi)
+              : (token: account.token, chatId: account.destino);
           await _telegramBot.validarBot(config.token);
           final tempDir =
               await Directory.systemTemp.createTemp('tg_sql_restore_');

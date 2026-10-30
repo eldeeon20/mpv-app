@@ -157,19 +157,12 @@ extension MoldesCrudExt on _MediaBlockScreenState {
       await Indice.asegurar(p);
       await _telegramActualizarEstadoIndice();
       final telegram = await Indice.credencialesTelegram(p);
-      final bot = await Indice.botTelegram(p);
       if (_telegramApiIdCtrl.text.isEmpty) {
         _telegramApiIdCtrl.text = telegram.apiId;
       }
 
       if (_telegramApiHashCtrl.text.isEmpty) {
         _telegramApiHashCtrl.text = telegram.apiHash;
-      }
-      if (_telegramBotTokenCtrl.text.isEmpty) {
-        _telegramBotTokenCtrl.text = bot.token;
-      }
-      if (_telegramBotChatCtrl.text.isEmpty) {
-        _telegramBotChatCtrl.text = bot.chatId;
       }
       // La caché comparte la pass del índice: se desbloquea acá.
       try {
@@ -322,14 +315,20 @@ extension MoldesCrudExt on _MediaBlockScreenState {
           nombre: nombre,
         );
         if ('${teleMeta?['modo'] ?? ''}' == 'bot') {
-          final config = await Indice.botTelegram(passIndice);
-          if (config.token.isEmpty || config.chatId.isEmpty) {
+          final accountId = '${teleMeta?['account_id'] ?? ''}';
+          final account = accountId.isEmpty
+              ? null
+              : await Indice.cuentaNube(pass: passIndice, id: accountId);
+          final legacy = account == null
+              ? await Indice.botTelegram(passIndice)
+              : (token: account.token, chatId: account.destino);
+          if (legacy.token.isEmpty || legacy.chatId.isEmpty) {
             throw StateError('faltan token/destino del Bot API en index.db');
           }
-          await _telegramBot.validarBot(config.token);
+          await _telegramBot.validarBot(legacy.token);
           await _telegramBot.validarDestino(
-            token: config.token,
-            chatId: '${teleMeta?['chat_id'] ?? config.chatId}',
+            token: legacy.token,
+            chatId: '${teleMeta?['chat_id'] ?? legacy.chatId}',
           );
           final fileId = '${teleMeta?['manifest_file_id'] ?? ''}';
           if (fileId.isEmpty) {
@@ -340,7 +339,7 @@ extension MoldesCrudExt on _MediaBlockScreenState {
             final file = File(
                 '${temporal.path}${Platform.pathSeparator}$nombre.hash.db');
             await _telegramBot.descargarArchivo(
-              token: config.token,
+              token: legacy.token,
               fileId: fileId,
               destination: file,
             );
@@ -354,7 +353,7 @@ extension MoldesCrudExt on _MediaBlockScreenState {
             }
             CreateMoldeSql.remoto =
                 (molde, absoluto, largo) => _telegramBot.leerRango(
-                      token: config.token,
+                      token: legacy.token,
                       manifest: manifest,
                       start: absoluto,
                       length: largo,
