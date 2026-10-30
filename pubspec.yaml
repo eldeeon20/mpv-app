@@ -1,0 +1,49 @@
+name: pr_app
+description: "MPV App: MediaBlock cifrado + reproductor multimedia (Rust: unarc, nostrn, nostringer, shamir, pkarr)."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.6.2
+
+# sqlite3 v3 con cifrado sqlite3mc (ChaCha20, SIN OpenSSL): el hook
+# baja/compila el SQLite con múltiples cifradores.
+# En Dart se elige con PRAGMA cipher = 'chacha20' (ver lib/services/app_db.dart).
+hooks:
+  user_defines:
+    sqlite3:
+      source: sqlite3mc
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+  rust_lib_pr_app:
+    path: rust_builder
+  flutter_rust_bridge: 2.12.0
+  http: ^1.2.2
+  path_provider: ^2.1.4
+  media_kit: ^1.2.6
+  media_kit_video: ^2.0.1
+  media_kit_libs_video: ^1.0.7
+  file_picker: ^8.1.2
+  permission_handler: ^11.3.1
+  cryptography: ^2.7.0
+  saf_util: ^3.1.0
+  saf_stream: ^4.0.1
+  sqlite3: ^3.0.0
+  audio_service: ^0.18.15
+  # Previas del molde en AVIF (libavif): solo la previa, el original intacto.
+  flutter_avif: ^3.1.0
+  pointycastle: ^4.0.0
+  handy_tdlib: 2.3.10
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true

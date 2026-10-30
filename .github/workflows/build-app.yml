@@ -1,0 +1,181 @@
+name: build-app
+
+# Compila SOLO Flutter (NO compila Rust):
+#   - APK Android arm64  -> usa el .so que dejó el workflow rust-lib
+#   - Windows x64        -> usa la DLL que dejó el workflow rust-lib
+#
+# Antes de correr esto, ejecutá una vez el workflow "rust-lib".
+on:
+  workflow_dispatch:
+
+env:
+  # Gradle (Android) y CMake (Windows) empaquetan el binario precompilado
+  # en vez de invocar cargo/cargokit.
+  RUST_PREBUILT: '1'
+
+jobs:
+  build:
+    name: app-${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: android
+            os: ubuntu-latest
+            command: flutter build apk --release --target-platform android-arm64
+          - target: windows
+            os: windows-latest
+            command: flutter build windows --release
+
+    steps:
+      - name: Free disk space
+        if: matrix.target == 'android'
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android/sdk/emulator
+          sudo rm -rf /opt/hostedtoolcache
+          sudo rm -rf /usr/local/share/boost
+          df -h
+
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        if: matrix.target == 'android'
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Verificar binarios Rust precompilados + bindings
+        shell: bash
+        run: |
+          set -e
+          for f in lib/src/rust/frb_generated.dart rust/src/frb_generated.rs; do
+            if [ ! -f "$f" ]; then
+              echo "Falta $f"
+              echo "Corré primero el workflow 'rust-lib'."
+              exit 1
+            fi
+          done
+          if [ "${{ matrix.target }}" = "android" ]; then
+            for f in librust_lib_pr_app.so libc++_shared.so; do
+              if [ ! -f "rust_builder/android/src/main/jniLibs/arm64-v8a/$f" ]; then
+                echo "Falta $f en rust_builder/android/src/main/jniLibs/arm64-v8a/"
+                echo "Corré primero el workflow 'rust-lib'."
+                exit 1
+              fi
+            done
+          else
+            if [ ! -f "rust_builder/windows/prebuilt/rust_lib_pr_app.dll" ]; then
+              echo "Falta rust_builder/windows/prebuilt/rust_lib_pr_app.dll"
+              echo "Corré primero el workflow 'rust-lib'."
+              exit 1
+            fi
+          fi
+
+      # ------------------------------------------------------------- cache
+      - name: Cache Dart pub packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.pub-cache
+          key: pub-app-${{ runner.os }}-${{ hashFiles('pubspec.yaml') }}
+          restore-keys: pub-app-${{ runner.os }}-
+
+      - name: Cache Gradle
+        if: matrix.target == 'android'
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-app-${{ runner.os }}-${{ hashFiles('android/**/*.gradle*') }}
+          restore-keys: gradle-app-${{ runner.os }}-
+
+      - name: Cache sqlite3mc prebuilt
+        uses: actions/cache@v5
+        with:
+          path: .dart_tool/hooks_runner/shared/sqlite3
+          key: sqlite3mc-${{ runner.os }}-${{ hashFiles('pubspec.yaml') }}
+          restore-keys: sqlite3mc-${{ runner.os }}-
+
+      # ------------------------------------------------------------- dart
+      - name: Fetch Dart packages
+        run: flutter pub get
+
+      # flutter_avif_android 3.1.0 trae Java 11 + un FlutterAvifPlugin.java
+      # viejo duplicado del .kt (Redeclaration) y AGP 8 lo rechaza.
+      - name: Parche JVM plugin avif
+        if: matrix.target == 'android'
+        run: |
+          PC="$HOME/.pub-cache"
+          F="$PC/hosted/pub.dev/flutter_avif_android-3.1.0/android/build.gradle"
+          J="$PC/hosted/pub.dev/flutter_avif_android-3.1.0/android/src/main/java/com/teknorota/flutter_avif/FlutterAvifPlugin.java"
+          [ -f "$J" ] && rm -v "$J" || echo "java ya ausente"
+          if [ -f "$F" ]; then
+            sed -i 's/JavaVersion.VERSION_11/JavaVersion.VERSION_17/g' "$F"
+            grep -n "VERSION_17" "$F" | head -3
+          else
+            echo "aviso: no se halló $F"
+          fi
+
+      - name: Analyze Dart (fail fast)
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      # ------------------------------------------------------------- build
+      - name: Cache Android NDK
+        id: ndk-cache
+        if: matrix.target == 'android'
+        uses: actions/cache@v5
+        with:
+          path: /usr/local/lib/android/sdk/ndk/27.0.12077973
+          key: ndk-27.0.12077973-app-v1
+
+      - name: Install NDK 27
+        if: matrix.target == 'android' && steps.ndk-cache.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          SDKMANAGER=$(ls /usr/local/lib/android/sdk/cmdline-tools/*/bin/sdkmanager | head -1)
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "ndk;27.0.12077973" >/dev/null 2>&1
+          test -d "${ANDROID_HOME:-/usr/local/lib/android/sdk}/ndk/27.0.12077973"
+
+      - name: Enable Windows desktop
+        if: matrix.target == 'windows'
+        run: flutter config --enable-windows-desktop
+
+      - name: Build ${{ matrix.target }}
+        run: ${{ matrix.command }}
+
+      - name: Verificar .so dentro del APK
+        if: matrix.target == 'android'
+        run: |
+          set -e
+          APK=$(ls build/app/outputs/flutter-apk/*.apk | head -1)
+          echo "APK: $APK"
+          unzip -l "$APK" | grep -E "lib/arm64-v8a/librust_lib_pr_app\.so" || {
+            echo "El APK no trae librust_lib_pr_app.so"; exit 1;
+          }
+          unzip -l "$APK" | grep -E "lib/arm64-v8a/libc\+\+_shared\.so" || {
+            echo "El APK no trae libc++_shared.so"; exit 1;
+          }
+
+      - name: Verificar DLL junto al .exe
+        if: matrix.target == 'windows'
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem -Recurse "build/windows/x64/runner/Release" -Filter "rust_lib_pr_app.dll" -ErrorAction SilentlyContinue
+          if (-not $dll) { Write-Error "Falta rust_lib_pr_app.dll en el bundle de Windows"; exit 1 }
+          $dll | ForEach-Object { $_.FullName }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: pr_app-${{ matrix.target }}
+          path: |
+            build/app/outputs/flutter-apk/*.apk
+            build/windows/x64/runner/Release/**
+          if-no-files-found: error

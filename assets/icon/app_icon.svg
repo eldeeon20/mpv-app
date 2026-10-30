@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>SpaceChat</title>
+  <defs>
+    <linearGradient id="g" x1="80" y1="80" x2="430" y2="430" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#28D7FF"/>
+      <stop offset=".5" stop-color="#6C63FF"/>
+      <stop offset="1" stop-color="#B14CFF"/>
+    </linearGradient>
+  </defs>
+
+  <!-- App background -->
+  <rect width="512" height="512" rx="112" fill="#080A12"/>
+
+  <!-- Tool symbol -->
+  <path
+    d="M145 151
+       H367
+       C379 151 386 164 380 175
+       L347 231
+       C342 240 333 246 322 246
+       H288
+       V358
+       C288 372 277 383 263 383
+       H249
+       C235 383 224 372 224 358
+       V246
+       H190
+       C179 246 170 240 165 231
+       L132 175
+       C126 164 133 151 145 151Z"
+    fill="url(#g)"
+  />
+
+  <!-- AI core -->
+  <circle cx="256" cy="202" r="31" fill="#080A12"/>
+
+  <!-- AI nodes -->
+  <g fill="none" stroke="url(#g)" stroke-width="12" stroke-linecap="round">
+    <path d="M256 202 L211 178"/>
+    <path d="M256 202 L301 178"/>
+    <path d="M256 202 L256 151"/>
+    <path d="M256 202 L256 253"/>
+    <path d="M256 202 L211 226"/>
+    <path d="M256 202 L301 226"/>
+  </g>
+
+  <g fill="#F4F7FF">
+    <circle cx="211" cy="178" r="8"/>
+    <circle cx="301" cy="178" r="8"/>
+    <circle cx="256" cy="151" r="8"/>
+    <circle cx="256" cy="253" r="8"/>
+    <circle cx="211" cy="226" r="8"/>
+    <circle cx="301" cy="226" r="8"/>
+  </g>
+
+  <!-- AI spark -->
+  <path
+    d="M380 103
+       L389 127
+       L413 136
+       L389 145
+       L380 169
+       L371 145
+       L347 136
+       L371 127Z"
+    fill="#F4F7FF"
+  />
+</svg>

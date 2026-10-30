@@ -1,0 +1,240 @@
+name: rust-lib
+
+# Compila SOLO Rust y deja los binarios + bindings commiteados:
+#   - android: librust_lib_pr_app.so + libc++_shared.so (arm64)
+#   - windows: rust_lib_pr_app.dll (x64)
+#   - bindings FRB (lib/src/rust + rust/src/frb_generated.rs)
+#
+# El workflow "build-app" NO compila Rust: solo empaqueta esto.
+# Correr cuando cambie rust/ (o a mano si hace falta).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ------------------------------------------------------------------ android
+  android:
+    name: rust-android
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android/sdk/emulator
+          sudo rm -rf /opt/hostedtoolcache
+          sudo rm -rf /usr/local/share/boost
+          df -h
+
+      - uses: actions/checkout@v5
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      # ------------------------------------------------------------- cache
+      - name: Cache Dart pub packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.pub-cache
+          key: pub-rustlib-${{ runner.os }}-${{ hashFiles('pubspec.yaml') }}
+          restore-keys: pub-rustlib-${{ runner.os }}-
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-rustlib-${{ runner.os }}-${{ hashFiles('rust/Cargo.toml') }}
+          restore-keys: cargo-rustlib-${{ runner.os }}-
+
+      - name: Cache cargo bin
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin
+          key: cargo-bin-rustlib-${{ runner.os }}-v1
+
+      # ------------------------------------------------------------- codegen
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: Install flutter_rust_bridge_codegen
+        run: |
+          if ! command -v flutter_rust_bridge_codegen >/dev/null 2>&1; then
+            mkdir -p "$HOME/.local/bin"
+            curl -fsSL "https://github.com/fzyzcjy/flutter_rust_bridge/releases/download/v2.12.0/flutter_rust_bridge_codegen-x86_64-unknown-linux-gnu-v2.12.0.tgz" -o "$RUNNER_TEMP/frb.tgz"
+            tar -xzf "$RUNNER_TEMP/frb.tgz" -C "$HOME/.local/bin"
+            chmod +x "$HOME/.local/bin/flutter_rust_bridge_codegen"
+          fi
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install cargo-expand
+        run: |
+          if ! command -v cargo-expand > /dev/null 2>&1; then
+            cargo install cargo-expand
+          fi
+
+      # cargo expand no debe ver el frb_generated viejo: se aparta lib.rs
+      # y se restaura después del codegen.
+      - name: Preparar lib.rs para codegen
+        run: |
+          set -e
+          cp rust/src/lib.rs rust/src/lib.rs.bak
+          printf 'pub mod api;\npub mod gt;\n' > rust/src/lib.rs
+
+      - name: Regenerar bindings Dart <-> Rust
+        run: flutter_rust_bridge_codegen generate
+
+      - name: Restaurar lib.rs (con frb_generated)
+        run: mv rust/src/lib.rs.bak rust/src/lib.rs
+
+      # ------------------------------------------------------------- android
+      - name: Cache Android NDK
+        id: ndk-cache
+        uses: actions/cache@v5
+        with:
+          path: /usr/local/lib/android/sdk/ndk/27.0.12077973
+          key: ndk-27.0.12077973-rustlib-v1
+
+      - name: Install NDK 27
+        if: steps.ndk-cache.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          SDKMANAGER=$(ls /usr/local/lib/android/sdk/cmdline-tools/*/bin/sdkmanager | head -1)
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "ndk;27.0.12077973" >/dev/null 2>&1
+          test -d "${ANDROID_HOME:-/usr/local/lib/android/sdk}/ndk/27.0.12077973"
+
+      - name: Install cargo-ndk
+        run: |
+          if ! command -v cargo-ndk >/dev/null 2>&1; then
+            cargo install cargo-ndk
+          fi
+
+      - name: Compilar Rust Android (release, arm64)
+        working-directory: rust
+        run: |
+          set -e
+          export ANDROID_NDK_HOME=$(ls -d ${ANDROID_HOME:-/usr/local/lib/android/sdk}/ndk/27.0.12077973)
+          export ANDROID_NDK_ROOT=$ANDROID_NDK_HOME
+          echo "NDK: $ANDROID_NDK_HOME"
+          # Plataforma 26: lutimes() de unrar_sys solo existe desde API 26.
+          # OJO: en cargo-ndk 4.x la flag es -P mayúscula (-p es de cargo).
+          cargo ndk -t arm64-v8a -P 26 build --release
+
+      - name: Copiar .so + libc++ al plugin Android
+        run: |
+          set -e
+          ABI=arm64-v8a
+          DEST=rust_builder/android/src/main/jniLibs/$ABI
+          mkdir -p "$DEST"
+          cp rust/target/aarch64-linux-android/release/librust_lib_pr_app.so "$DEST"/
+          NDK_ROOT=$(ls -d ${ANDROID_HOME:-/usr/local/lib/android/sdk}/ndk/27.* | head -1)
+          cp "$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "$DEST"/
+          ls -la "$DEST"
+
+      # ------------------------------------------------------------- artifacts
+      - name: Upload .so Android
+        uses: actions/upload-artifact@v5
+        with:
+          name: android-libs
+          path: rust_builder/android/src/main/jniLibs/arm64-v8a/*.so
+          if-no-files-found: error
+
+      - name: Upload bindings FRB
+        uses: actions/upload-artifact@v5
+        with:
+          name: frb-bindings
+          path: |
+            lib/src/rust
+            rust/src/frb_generated.rs
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------ windows
+  windows:
+    name: rust-windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-rustlib-${{ runner.os }}-${{ hashFiles('rust/Cargo.toml') }}
+          restore-keys: cargo-rustlib-${{ runner.os }}-
+
+      - name: Compilar Rust Windows (release, x64)
+        working-directory: rust
+        run: cargo build --release
+
+      - name: Copiar DLL al plugin Windows
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "rust_builder/windows/prebuilt" | Out-Null
+          Copy-Item "rust/target/release/rust_lib_pr_app.dll" "rust_builder/windows/prebuilt/" -Force
+          Get-ChildItem "rust_builder/windows/prebuilt"
+
+      - name: Upload DLL Windows
+        uses: actions/upload-artifact@v5
+        with:
+          name: windows-dll
+          path: rust_builder/windows/prebuilt/*.dll
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------- commit
+  commit:
+    name: commit-rust
+    needs: [android, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Bajar .so Android
+        uses: actions/download-artifact@v5
+        with:
+          name: android-libs
+          path: rust_builder/android/src/main/jniLibs/arm64-v8a
+
+      - name: Bajar DLL Windows
+        uses: actions/download-artifact@v5
+        with:
+          name: windows-dll
+          path: rust_builder/windows/prebuilt
+
+      - name: Bajar bindings FRB
+        uses: actions/download-artifact@v5
+        with:
+          name: frb-bindings
+          path: .
+
+      - name: Commitear .so + .dll + bindings
+        run: |
+          git config user.name "rust-lib-bot"
+          git config user.email "rust-lib-bot@users.noreply.github.com"
+          git add -f rust_builder/android/src/main/jniLibs
+          git add -f rust_builder/windows/prebuilt
+          git add -f lib/src/rust rust/src/frb_generated.rs
+          if git diff --cached --quiet; then
+            echo "Sin cambios: el .so/.dll/bindings ya estan al dia"
+          else
+            git commit -m "chore(rust): prebuilt android .so + windows .dll + bindings"
+            git push
+          fi

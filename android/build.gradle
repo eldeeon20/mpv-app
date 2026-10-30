@@ -1,0 +1,39 @@
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.buildDir = "../build"
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+}
+subprojects {
+    project.evaluationDependsOn(":app")
+}
+
+// Algunos plugins (ej. flutter_avif_android) traen Java 11 + Kotlin 17
+// y AGP 8 lo rechaza: se alinean todos a 17 (withPlugin = seguro
+// en cualquier momento de la evaluación).
+subprojects { p ->
+    p.pluginManager.withPlugin('com.android.library') {
+        try {
+            p.android.compileOptions.sourceCompatibility =
+                JavaVersion.VERSION_17
+            p.android.compileOptions.targetCompatibility =
+                JavaVersion.VERSION_17
+        } catch (_) {}
+        try {
+            p.tasks.withType(
+                org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+            ).configureEach {
+                it.kotlinOptions.jvmTarget = '17'
+            }
+        } catch (_) {}
+    }
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}

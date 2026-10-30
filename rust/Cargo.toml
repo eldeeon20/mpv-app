@@ -1,0 +1,42 @@
+[package]
+name = "rust_lib_pr_app"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+flutter_rust_bridge = "=2.12.0"
+rand = "0.9"
+anyhow = "1"
+sha2 = "0.10"
+tokio = { version = "1.44.1", features = ["full"] }
+pkarr = "=8.0.0"
+aes-gcm = "0.10"
+pbkdf2 = "0.12"
+nostr-sdk = { version = "=0.43.0", features = ["nip44", "nip59"] }
+nostr = "=0.43.1"
+shamirsecretsharing = "0.1"
+rustls = { version = "0.23", features = ["ring"] }
+nostringer = "0.1.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# --- HuggingFace (subir/bajar moldes .mld y SQL del índice) ---
+hf-hub = { version = "=1.0.0-rc.1", features = ["blocking"] }
+# reqwest 0.13 (que usa hf-hub) trae rustls-platform-verifier (<0.8): el
+# [patch] de abajo lo cambia por el fork con fallback WebPKI (sin init JNI).
+reqwest = { version = "0.11", default-features = false, features = ["rustls-tls", "blocking", "socks"] }
+# --- Archives (RAR5/7z/ZIP/tar/gz/arj/lha/zoo... unificado) ---
+unarc-rs = "0.6.1"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
+
+# unrar_sys 0.5.8 linkea -lpthread en todos los no-Windows; Android no tiene
+# libpthread (va dentro de libc) y el link falla. Vendor parchado.
+[patch.crates-io]
+unrar_sys = { path = "vendor/unrar_sys" }
+# Fork 0.7.0 con fallback WebPKI en Android sin JNI (cubre el req
+# >=0.6,<0.8 de reqwest 0.13, que entra por hf-hub).
+rustls-platform-verifier = { git = "https://github.com/eduardo-bertey/rustls-platform-verifier" }
