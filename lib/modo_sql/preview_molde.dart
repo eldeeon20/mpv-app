@@ -149,7 +149,6 @@ Future<Uint8List?> _achicarUi(ui.Image src, int ancho) async {
 /// El original nunca se modifica.
 /// (Sin encoder jpeg a mano: `ImageByteFormat` no tiene jpeg.)
 Future<List<Uint8List>> _previaImagen(String ruta) async {
-  ui.ImmutableBuffer? buffer;
   ui.Codec? codec;
   try {
     final archivo = File(ruta);
@@ -174,7 +173,7 @@ Future<List<Uint8List>> _previaImagen(String ruta) async {
         return [];
       }
     }
-    buffer = await ui.ImmutableBuffer.fromFilePath(ruta);
+    final buffer = await ui.ImmutableBuffer.fromFilePath(ruta);
     codec = await ui.instantiateImageCodecFromBuffer(
       buffer,
       targetWidth: 320,
@@ -188,13 +187,11 @@ Future<List<Uint8List>> _previaImagen(String ruta) async {
       return [await PreviewMolde.aAvif(Uint8List.fromList(b))];
     } finally {
       frame.image.dispose();
-      codec.dispose();
     }
   } catch (_) {
     return [];
   } finally {
     codec?.dispose();
-    buffer?.dispose();
   }
 }
 

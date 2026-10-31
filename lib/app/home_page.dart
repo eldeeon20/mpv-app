@@ -53,11 +53,6 @@ class _HomePageState extends State<HomePage> {
                 onTap: () => _navigate(1),
               ),
               ListTile(
-                leading: const Icon(Icons.add_circle_outline_rounded),
-                title: const Text('Crear molde'),
-                onTap: () => _navigate(2),
-              ),
-              ListTile(
                 leading: const Icon(Icons.inventory_2_outlined),
                 title: const Text('Moldes'),
                 onTap: () => _navigate(3),
@@ -125,32 +120,7 @@ class _DriveHeader extends StatelessWidget {
               icon: const Icon(Icons.menu_rounded),
             ),
           ),
-          const SizedBox(width: 4),
-          Container(
-            width: 46,
-            height: 46,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16),
-              gradient: const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [Color(0xFF67E8F9), Color(0xFF38BDF8)],
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFF38BDF8).withValues(alpha: 0.2),
-                  blurRadius: 22,
-                  offset: const Offset(0, 8),
-                ),
-              ],
-            ),
-            child: const Icon(
-              Icons.storage_rounded,
-              color: Color(0xFF062033),
-              size: 25,
-            ),
-          ),
-          const SizedBox(width: 13),
+          const SizedBox(width: 12),
           const Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
