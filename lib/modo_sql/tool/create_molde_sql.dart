@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import '../cache/trozo_cache.dart';
 import '../indice/indice.dart';
 import '../db/caja_sql.dart';
+import '../media_server/claves_molde_v3.dart';
 import '../media_server/media_server.dart';
 import '../preview_molde.dart';
 
@@ -49,6 +50,7 @@ class CreateMoldeSql {
   static final Map<String, MoldeInfo> _memoInfo = {};
   static final Map<String, List<FichaArchivo>> _memoFilas = {};
   static final Map<String, Uint8List> _memoClaves = {};
+  static final Map<String, Uint8List> _memoClavesMaestrasV3 = {};
 
   static String _k(String claveSql, String molde) => '$claveSql\x00$molde';
 
@@ -58,24 +60,48 @@ class CreateMoldeSql {
     _memoInfo.removeWhere((k, _) => k.endsWith('\x00$molde'));
     _memoFilas.removeWhere((k, _) => k.endsWith('\x00$molde'));
     _memoClaves.removeWhere((k, _) => k.contains('\x00$molde\x00'));
+    _memoClavesMaestrasV3.removeWhere((k, _) => k.contains('\x00$molde\x00'));
   }
 
-  /// Clave de archivo memoizada (un solo PBKDF2 por archivo/sesión).
+  /// Clave de archivo memoizada según el KDF versionado del molde.
   static Future<Uint8List> claveDe({
     required String claveSql,
     required String molde,
     required String archivo,
     required String salHex,
+    String cifrado = Duro.modoV2,
   }) async {
-    final k = '${_k(claveSql, molde)}\x00$archivo\x00$salHex';
+    final k = '${_k(claveSql, molde)}\x00$archivo\x00$salHex\x00$cifrado';
     final ya = _memoClaves[k];
     if (ya != null) return ya;
-    final c = await Duro.claveArchivoHilo(
-      clave: claveSql,
-      molde: molde,
-      nombre: archivo,
-      salHex: salHex,
-    );
+    late final Uint8List c;
+    if (cifrado == ClavesMoldeV3.marker) {
+      final masterKey = '${_k(claveSql, molde)}\x00$salHex';
+      var master = _memoClavesMaestrasV3[masterKey];
+      if (master == null) {
+        master = await ClavesMoldeV3.derivarMaestra(
+          clave: claveSql,
+          salHex: salHex,
+        );
+        if (_memoClavesMaestrasV3.length >= 16) {
+          _memoClavesMaestrasV3.clear();
+        }
+        _memoClavesMaestrasV3[masterKey] = master;
+      }
+      c = await ClavesMoldeV3.derivarArchivo(
+        claveMaestra: master,
+        molde: molde,
+        nombre: archivo,
+        salHex: salHex,
+      );
+    } else {
+      c = await Duro.claveArchivoHilo(
+        clave: claveSql,
+        molde: molde,
+        nombre: archivo,
+        salHex: salHex,
+      );
+    }
     if (_memoClaves.length > 100) _memoClaves.clear();
     _memoClaves[k] = c;
     return c;
@@ -197,6 +223,7 @@ class CreateMoldeSql {
     List<String> tags = const [],
     Map<String, List<String>>? tagsPorArchivo,
     int trozoClaro = Duro.trozoClaro,
+    String cifrado = Duro.modoV2,
     String? passIndice,
     // Captura de video (surface oculta del creador). Sin captura,
     // los videos quedan sin previas (icono+formato).
@@ -209,6 +236,9 @@ class CreateMoldeSql {
     }
     if (trozoClaro <= 0) {
       throw ArgumentError('mediablock: trozoClaro debe ser > 0');
+    }
+    if (cifrado != Duro.modoV2 && cifrado != ClavesMoldeV3.marker) {
+      throw ArgumentError.value(cifrado, 'cifrado', 'modo no soportado');
     }
     final origen = Directory(origenDir);
     if (!await origen.exists()) {
@@ -257,6 +287,18 @@ class CreateMoldeSql {
       '${destino.path}.building_${DateTime.now().microsecondsSinceEpoch}',
     );
     final sal = Duro.nuevaSal();
+    final iniciado = DateTime.now();
+    final reloj = Stopwatch()..start();
+    log?.call('⏱ inicio ${iniciado.toIso8601String()} · cifrado $cifrado');
+    final claveMaestraV3 = cifrado == ClavesMoldeV3.marker
+        ? await ClavesMoldeV3.derivarMaestra(clave: clave, salHex: sal)
+        : null;
+    if (claveMaestraV3 != null) {
+      if (_memoClavesMaestrasV3.length >= 16) {
+        _memoClavesMaestrasV3.clear();
+      }
+      _memoClavesMaestrasV3['${_k(clave, nombre)}\x00$sal'] = claveMaestraV3;
+    }
     var offset = 0;
     final filas = <Map<String, Object?>>[];
     var conPrevias = 0;
@@ -273,12 +315,19 @@ class CreateMoldeSql {
         log?.call('· [$idx/${fuentes.length}] $nombreRel '
             '(${(tam / 1048576).toStringAsFixed(1)}MB)');
         final fecha = (await f.lastModified()).millisecondsSinceEpoch;
-        final claveArchivo = await Duro.claveArchivoHilo(
-          clave: clave,
-          molde: nombre,
-          nombre: nombreRel,
-          salHex: sal,
-        );
+        final claveArchivo = claveMaestraV3 == null
+            ? await Duro.claveArchivoHilo(
+                clave: clave,
+                molde: nombre,
+                nombre: nombreRel,
+                salHex: sal,
+              )
+            : await ClavesMoldeV3.derivarArchivo(
+                claveMaestra: claveMaestraV3,
+                molde: nombre,
+                nombre: nombreRel,
+                salHex: sal,
+              );
         await Duro.cifrarArchivoADiscoHilo(
           claveArchivo: claveArchivo,
           trozoClaro: trozoClaro,
@@ -371,7 +420,7 @@ class CreateMoldeSql {
             'fecha': DateTime.now().millisecondsSinceEpoch,
             'total': offset,
             'sal': sal,
-            'cifrado': 'gcm-c-entry-v2',
+            'cifrado': cifrado,
           });
           await temporal.rename(destino.path);
           movido = true;
@@ -401,6 +450,9 @@ class CreateMoldeSql {
           passMolde: clave,
         );
       }
+      reloj.stop();
+      log?.call('⏱ fin ${DateTime.now().toIso8601String()} · '
+          '${reloj.elapsedMilliseconds} ms · modo $cifrado');
       return hechoN;
     } finally {
       if (await temporal.exists()) await temporal.delete();
@@ -584,6 +636,7 @@ class CreateMoldeSql {
       molde: molde,
       archivo: archivo,
       salHex: infoOk.sal,
+      cifrado: infoOk.cifrado,
     );
     final fuera = <Uint8List>[];
     Object? primerError;
@@ -599,7 +652,8 @@ class CreateMoldeSql {
           cache: cache,
           info: infoOk,
           filas: fichas,
-          claveArchivo: infoOk.cifrado == 'gcm-c-entry-v2'
+          claveArchivo: infoOk.cifrado == Duro.modoV2 ||
+                  infoOk.cifrado == ClavesMoldeV3.marker
               ? await Duro.claveEntrada(
                   claveArchivo: claveOk,
                   nombreEntrada: p.nombre,
@@ -787,6 +841,7 @@ class CreateMoldeSql {
           molde: molde,
           archivo: archivo,
           salHex: infoOk.sal,
+          cifrado: infoOk.cifrado,
         );
     final primero = desde ~/ f.trozo;
     final ultimo = (hasta - 1) ~/ f.trozo;

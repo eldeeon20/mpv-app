@@ -34,6 +34,7 @@ extension MoldesCrudExt on _MediaBlockScreenState {
         origenDir: _carpetaCtrl.text.trim(),
         clave: _clave,
         tags: tags,
+        cifrado: _modoCifradoCrear,
         passIndice: await _passIndice(),
         captura: _captura,
         log: _add,

@@ -4,7 +4,7 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
-const int telegramMldPartBytes = 17 * 1000 * 1000;
+const int telegramMldPartBytes = 19 * 1000 * 1000;
 
 class TelegramMldPart {
   final int offset;

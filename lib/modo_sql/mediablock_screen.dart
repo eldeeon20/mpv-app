@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
-import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -30,6 +29,7 @@ import 'moldes/indexar_dialog.dart';
 import 'moldes/lista_moldes.dart';
 import 'moldes/tags_dialog.dart';
 import 'media_server/media_server.dart';
+import 'media_server/claves_molde_v3.dart';
 import 'minis/mini_cache.dart';
 import 'minis/mini_grid.dart';
 import 'preview/cargar_completo.dart';
@@ -79,6 +79,7 @@ class _MediaBlockScreenState extends State<MediaBlockScreen>
   final _carpetaIndiceCtrl = TextEditingController();
   final _claveCtrl = TextEditingController();
   final _tagsCtrl = TextEditingController();
+  String _modoCifradoCrear = ClavesMoldeV3.marker;
   bool _creando = false;
 
   // Moldes + abierto (server tonto + filas de TU sql).
@@ -365,56 +366,6 @@ class _MediaBlockScreenState extends State<MediaBlockScreen>
                 _tabAdmin(),
                 _tabCuentas(),
               ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(24),
-              child: BackdropFilter(
-                filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF152438).withValues(alpha: 0.76),
-                    borderRadius: BorderRadius.circular(24),
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.1),
-                    ),
-                  ),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 5, vertical: 5),
-                  child: TabBar(
-                    controller: _tabs,
-                    dividerColor: Colors.transparent,
-                    indicatorSize: TabBarIndicatorSize.tab,
-                    indicator: BoxDecoration(
-                      color: const Color(0xFF67E8F9).withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                    labelColor: const Color(0xFF9BEAF5),
-                    unselectedLabelColor: const Color(0xFF9BAEC2),
-                    labelStyle: const TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    labelPadding: EdgeInsets.zero,
-                    tabs: const [
-                      Tab(icon: Icon(Icons.grid_view_rounded), text: 'Previas'),
-                      Tab(
-                          icon: Icon(Icons.folder_open_rounded),
-                          text: 'Archivos'),
-                      Tab(
-                          icon: Icon(Icons.add_circle_outline_rounded),
-                          text: 'Crear'),
-                      Tab(
-                          icon: Icon(Icons.inventory_2_outlined),
-                          text: 'Moldes'),
-                      Tab(icon: Icon(Icons.tune_rounded), text: 'Ajustes'),
-                      Tab(icon: Icon(Icons.cloud_rounded), text: 'Cuentas'),
-                    ],
-                  ),
-                ),
-              ),
             ),
           ),
         ]),
@@ -823,6 +774,9 @@ class _MediaBlockScreenState extends State<MediaBlockScreen>
       carpeta: _carpetaCtrl,
       clave: _claveCtrl,
       tags: _tagsCtrl,
+      modoCifrado: _modoCifradoCrear,
+      onModoCifradoChanged: (value) =>
+          setState(() => _modoCifradoCrear = value),
       carpetaIndice: _carpetaIndiceCtrl,
       creando: _creando,
       estado: _crearEstado,

@@ -12,6 +12,7 @@ class Duro {
 
   static const trozoClaro = 64 * 1024;
   static const overhead = 12 + 16;
+  static const modoV2 = 'gcm-c-entry-v2';
   static const _pbkdf2Vueltas = 20000;
 
   static String nuevaSal() {

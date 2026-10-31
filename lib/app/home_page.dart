@@ -53,6 +53,11 @@ class _HomePageState extends State<HomePage> {
                 onTap: () => _navigate(1),
               ),
               ListTile(
+                leading: const Icon(Icons.add_circle_outline_rounded),
+                title: const Text('Crear molde'),
+                onTap: () => _navigate(2),
+              ),
+              ListTile(
                 leading: const Icon(Icons.inventory_2_outlined),
                 title: const Text('Moldes'),
                 onTap: () => _navigate(3),
