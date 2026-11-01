@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'home_page.dart';
+import 'rust_init.dart';
 
 /// App principal: tema oscuro + HomePage.
 class PrApp extends StatelessWidget {
@@ -32,7 +33,33 @@ class PrApp extends StatelessWidget {
           ),
         ),
       ),
+      // Si Rust no inicializó, se ve el motivo real (antes solo iba a
+      // debugPrint y todo fallaba después con "has not been initialized").
+      builder: (context, child) => rustListo
+          ? (child ?? const SizedBox.shrink())
+          : Column(
+              children: [
+                MaterialBanner(
+                  backgroundColor: const Color(0xFF7F1D1D),
+                  content: Text(
+                    'Rust no inicializó: ${rustErrorTexto()}',
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () async {
+                        await ensureRust();
+                      },
+                      child: const Text('Reintentar',
+                          style: TextStyle(color: Colors.white)),
+                    ),
+                  ],
+                ),
+                Expanded(child: child ?? const SizedBox.shrink()),
+              ],
+            ),
       home: const HomePage(),
     );
   }
 }
+

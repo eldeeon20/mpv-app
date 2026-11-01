@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:pr_app/services/app_db.dart';
 
 import 'admin/panel_admin.dart';
+import '../app/rust_init.dart';
 import 'preview/dialogo_video.dart';
 import 'app/claves_app.dart';
 import 'cache/previa_cache.dart';

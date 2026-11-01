@@ -253,6 +253,11 @@ extension MoldesCrudExt on _MediaBlockScreenState {
 
   Future<void> _telegramActualizarEstadoIndice() async {
     try {
+      // Si el init de Rust falló al arrancar, reintentar acá.
+      if (!await ensureRust()) {
+        _add('✗ Rust sin inicializar: ${rustErrorTexto()}');
+        return;
+      }
       final directory = await MediaBase.carpetaMoldes();
       final indexFile =
           File('${directory.path}${Platform.pathSeparator}${Indice.archivo}');

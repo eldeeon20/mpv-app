@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
-import 'package:pr_app/src/rust/frb_generated.dart';
 
 import '../media/media_library.dart';
 import '../services/settings.dart';
+import 'rust_init.dart';
 
 /// Arranque mínimo de MPV App: sin Colab, sin Tor, sin GPU.
 /// Rust se inicializa igual (pkarr/nostr/shamir/unarc lo necesitan).
@@ -11,10 +11,9 @@ Future<void> initApp() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
 
-  try {
-    await RustLib.init();
-  } catch (e) {
-    debugPrint('Rust init error: $e');
+  final rustOk = await ensureRust();
+  if (!rustOk) {
+    debugPrint('Rust init FALLÓ: ${rustErrorTexto()}');
   }
 
   try {
