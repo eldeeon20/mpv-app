@@ -213,9 +213,40 @@ extension MoldesCrudExt on _MediaBlockScreenState {
       for (final m in crudo) {
         final nombre = '${m['nombre'] ?? ''}';
         if (nombre.isEmpty || !vistos.add(nombre)) continue;
+        // Auto-reparar ruta: si el .mld ya no está donde dice el índice
+        // (lo moviste a mano o cambiaste el dir), se busca por nombre en la
+        // carpeta actual de moldes y en el dir configurado, y se corrige el
+        // índice para que la lista/log muestre la ruta real.
+        var ruta = '${m['mld_ruta'] ?? ''}';
+        if (ruta.isEmpty || !await File(ruta).exists()) {
+          final candidatos = <String>[];
+          try {
+            final carpeta = await MediaBase.carpetaMoldes();
+            candidatos.add('${carpeta.path}${Platform.pathSeparator}$nombre.mld');
+          } catch (_) {}
+          final dirCfg = _carpetaCtrl.text.trim();
+          if (dirCfg.isNotEmpty) {
+            candidatos.add('$dirCfg${Platform.pathSeparator}$nombre.mld');
+          }
+          for (final c in candidatos) {
+            if (await File(c).exists()) {
+              ruta = c;
+              try {
+                await Indice.actualizarRutas(
+                  pass: p,
+                  nombre: nombre,
+                  dbRuta: '',
+                  mldRuta: c,
+                );
+                _add('· ruta corregida: $nombre → $c');
+              } catch (_) {}
+              break;
+            }
+          }
+        }
         _moldes.add(MoldeInfo(
           nombre: nombre,
-          ruta: '${m['mld_ruta'] ?? ''}',
+          ruta: ruta,
           fecha: (m['fecha'] as int?) ?? 0,
           total: (m['total'] as int?) ?? 0,
           sal: '${m['sal'] ?? ''}',

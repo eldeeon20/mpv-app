@@ -153,6 +153,21 @@ jobs:
           flutter analyze --no-fatal-infos --no-fatal-warnings || \
             echo "::warning::analyze con issues (no bloquea el build)"
 
+      # flutter_avif_android 3.1.0 trae Java 11 + un FlutterAvifPlugin.java
+      # viejo duplicado del .kt (Redeclaration) y Java/Kotlin desalineados.
+      - name: Parche JVM plugin avif
+        run: |
+          PC="$HOME/.pub-cache"
+          F="$PC/hosted/pub.dev/flutter_avif_android-3.1.0/android/build.gradle"
+          J="$PC/hosted/pub.dev/flutter_avif_android-3.1.0/android/src/main/java/com/teknorota/flutter_avif/FlutterAvifPlugin.java"
+          [ -f "$J" ] && rm -v "$J" || echo "java ya ausente"
+          if [ -f "$F" ]; then
+            sed -i 's/JavaVersion.VERSION_11/JavaVersion.VERSION_17/g' "$F"
+            grep -n "VERSION_17" "$F" | head -3
+          else
+            echo "aviso: no se halló $F"
+          fi
+
       - name: flutter pub get (post-codegen)
         run: flutter pub get
 

@@ -299,36 +299,89 @@ class Indice {
     caja.cerrar();
   }
 
+  /// El índice guarda las rutas como pista, pero el .mld/.db puede estar en
+  /// cualquier lado (lo movés a mano o cambiás de carpeta). Si la ruta
+  /// guardada no existe, se busca por nombre en las carpetas candidatas.
+  static Future<String> _resolverRuta(
+    String guardada,
+    String nombre,
+    String ext,
+  ) async {
+    if (guardada.isNotEmpty && await File(guardada).exists()) return guardada;
+
+    final nombres = <String>{};
+    if (guardada.isNotEmpty) nombres.add(guardada.split(RegExp(r'[/\\]')).last);
+    if (nombre.isNotEmpty) nombres.add('$nombre.$ext');
+
+    final raices = <String>{};
+    if (guardada.isNotEmpty) raices.add(File(guardada).parent.path);
+    try {
+      raices.add((await MediaBase.carpetaMoldes()).path);
+    } catch (_) {}
+    if (Platform.isAndroid) {
+      raices.add('/storage/emulated/0/Download');
+    }
+    try {
+      raices.add('${(await getApplicationSupportDirectory()).path}/db');
+      raices.add((await getApplicationSupportDirectory()).path);
+    } catch (_) {}
+
+    for (final raiz in raices) {
+      for (final n in nombres) {
+        final directo = File('$raiz${Platform.pathSeparator}$n');
+        if (await directo.exists()) return directo.path;
+      }
+      final dir = Directory(raiz);
+      if (!await dir.exists()) continue;
+      try {
+        await for (final e in dir.list(followLinks: false)) {
+          if (e is! Directory) continue;
+          for (final n in nombres) {
+            final f = File('${e.path}${Platform.pathSeparator}$n');
+            if (await f.exists()) return f.path;
+          }
+        }
+      } catch (_) {}
+    }
+    return guardada;
+  }
+
   /// Índice liviano: solo QUÉ sql + SU pass (+ .mld y números).
   static Future<List<Map<String, Object?>>> listarRaw(String pass) async {
     final caja = await _caja(pass);
     try {
       final rs = caja.db.select('SELECT * FROM indice ORDER BY nombre;');
-      return [
-        for (final r in rs)
-          {
-            'nombre': '${r['nombre'] ?? ''}',
-            'db': '${r['sql'] ?? ''}',
-            'db_ruta': '${r['sql'] ?? ''}',
-            'pass': '${r['pass'] ?? ''}',
-            'mld_ruta': '${r['mld'] ?? ''}',
-            'n': (r['n'] as int?) ?? 0,
-            'total': (r['total'] as int?) ?? 0,
-            'fecha': (r['fecha'] as int?) ?? 0,
-            'sal': '${r['sal'] ?? ''}',
-            'cifrado': 'sql-chacha20',
-            // HF: dónde vive remoto (repo_id = dir/user), con qué
-            // token entrar y qué versión se subió por última vez.
-            // hash_*: con QUÉ nombre (hash256) vive cada archivo en HF.
-            // carpeta: anidado SOLO del índice ('' = raíz).
-            'hf_repo': '${r['hf_repo'] ?? ''}',
-            'hf_token': '${r['hf_token'] ?? ''}',
-            'version': (r['version'] as int?) ?? 0,
-            'hash_mld': '${r['hash_mld'] ?? ''}',
-            'hash_sql': '${r['hash_sql'] ?? ''}',
-            'carpeta': '${r['carpeta'] ?? ''}',
-          }
-      ];
+      final out = <Map<String, Object?>>[];
+      for (final r in rs) {
+        final nombre = '${r['nombre'] ?? ''}';
+        // Rutas resueltas: si el archivo ya no está donde decía el índice,
+        // se muestra la ruta real (el índice es solo una pista).
+        final sql = await _resolverRuta('${r['sql'] ?? ''}', nombre, 'db');
+        final mld = await _resolverRuta('${r['mld'] ?? ''}', nombre, 'mld');
+        out.add({
+          'nombre': nombre,
+          'db': sql,
+          'db_ruta': sql,
+          'pass': '${r['pass'] ?? ''}',
+          'mld_ruta': mld,
+          'n': (r['n'] as int?) ?? 0,
+          'total': (r['total'] as int?) ?? 0,
+          'fecha': (r['fecha'] as int?) ?? 0,
+          'sal': '${r['sal'] ?? ''}',
+          'cifrado': 'sql-chacha20',
+          // HF: dónde vive remoto (repo_id = dir/user), con qué
+          // token entrar y qué versión se subió por última vez.
+          // hash_*: con QUÉ nombre (hash256) vive cada archivo en HF.
+          // carpeta: anidado SOLO del índice ('' = raíz).
+          'hf_repo': '${r['hf_repo'] ?? ''}',
+          'hf_token': '${r['hf_token'] ?? ''}',
+          'version': (r['version'] as int?) ?? 0,
+          'hash_mld': '${r['hash_mld'] ?? ''}',
+          'hash_sql': '${r['hash_sql'] ?? ''}',
+          'carpeta': '${r['carpeta'] ?? ''}',
+        });
+      }
+      return out;
     } finally {
       caja.cerrar();
     }
