@@ -76,6 +76,34 @@ extension MoldesCrudExt on _MediaBlockScreenState {
     if (mounted) setState(() => _creando = false);
   }
 
+  /// El índice cambió tras crear/modificar un molde: ofrece respaldarlo
+  /// cifrado en Mensajes guardados del Telegram personal.
+  Future<void> _telegramPreguntarRespaldoIndice() async {
+    if (!mounted) return;
+    final subir = await showDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Respaldar index.db'),
+        content: const Text(
+          'El índice se actualizó. ¿Subir el respaldo cifrado a '
+          'Mensajes guardados (Telegram personal)?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Ahora no'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Respaldar'),
+          ),
+        ],
+      ),
+    );
+    if (subir == true) await _telegramSubirIndice();
+  }
+
   /// Al entrar SIEMPRE pide la pass del índice (no se guarda).
   /// Se puede saltear con "Ahora no" y ponerla en Moldes.
   Future<void> _preguntarIndice() async {
