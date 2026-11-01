@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -88,6 +89,43 @@ void main() {
     );
 
     expect(bytes, [2, 3, 4, 5]);
+  });
+
+  test('restores a Telegram molde to disk part by part', () async {
+    final directory = await Directory.systemTemp.createTemp('tg_restore_test_');
+    addTearDown(() => directory.delete(recursive: true));
+    final service = TelegramBotStorage(
+      client: _TelegramClient(),
+      apiBase: Uri(scheme: 'https', host: 'telegram.test'),
+      partBytes: 4,
+    );
+    addTearDown(service.close);
+    final manifest = TelegramMldManifest(
+      size: 8,
+      parts: const [
+        TelegramMldPart(
+          offset: 0,
+          length: 4,
+          messageId: 10,
+          fileId: 'first',
+        ),
+        TelegramMldPart(
+          offset: 4,
+          length: 4,
+          messageId: 11,
+          fileId: 'second',
+        ),
+      ],
+    );
+    final destination = File('${directory.path}/restored.mld');
+
+    await service.restaurarMolde(
+      token: '123:abc',
+      manifest: manifest,
+      destination: destination,
+    );
+
+    expect(await destination.readAsBytes(), [0, 1, 2, 3, 4, 5, 6, 7]);
   });
 }
 

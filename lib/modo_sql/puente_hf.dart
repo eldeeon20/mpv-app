@@ -402,7 +402,8 @@ class PuenteHf {
   /// Sube varios moldes (cada uno a SU repo del índice). Por hash: si
   /// `<sha>.mld` y `<sha>.sql` ya están arriba, se salta (ya está).
   /// Retorna (subidos, saltados).
-  Future<({int subidos, int saltados})> subirSeleccionados({
+  Future<({int subidos, int saltados, List<String> completados})>
+      subirSeleccionados({
     required String passIndice,
     required String claveSql,
     required List<String> nombres,
@@ -412,6 +413,7 @@ class PuenteHf {
   }) async {
     var subidos = 0;
     var saltados = 0;
+    final completados = <String>[];
     final repoCache = <String, Set<String>>{};
     for (final nombre in nombres) {
       try {
@@ -449,6 +451,7 @@ class PuenteHf {
             (hashSql.isEmpty || arriba.contains('$hashSql.sql'))) {
           log?.call('· "$nombre": ya está arriba ($hashMld), se salta');
           saltados++;
+          completados.add(nombre);
           continue;
         }
         await subirMolde(
@@ -460,11 +463,16 @@ class PuenteHf {
           log: log,
         );
         subidos++;
+        completados.add(nombre);
       } catch (e) {
         log?.call('✗ "$nombre": $e');
       }
     }
-    return (subidos: subidos, saltados: saltados);
+    return (
+      subidos: subidos,
+      saltados: saltados,
+      completados: completados,
+    );
   }
 
   /// Sube SOLO el índice (`indice.db`, cifrado con tu clave) al repo

@@ -317,6 +317,51 @@ class TelegramBotStorage {
     return bytes;
   }
 
+  Future<void> restaurarMolde({
+    required String token,
+    required TelegramMldManifest manifest,
+    required File destination,
+    void Function(int restaurados, int total)? progreso,
+  }) async {
+    if (await destination.exists()) {
+      throw StateError('El destino ya existe: ${destination.path}');
+    }
+    await destination.parent.create(recursive: true);
+    final temporal = File(
+      '${destination.path}.restoring_${DateTime.now().microsecondsSinceEpoch}',
+    );
+    final output = temporal.openWrite(mode: FileMode.writeOnly);
+    try {
+      for (final part in manifest.parts) {
+        final directory =
+            await Directory.systemTemp.createTemp('mpv_tg_restore_');
+        final local = File(
+          '${directory.path}${Platform.pathSeparator}${part.offset}.part',
+        );
+        try {
+          await _descargarParte(token, part, local);
+          await output.addStream(local.openRead());
+          progreso?.call(part.offset + part.length, manifest.size);
+        } finally {
+          await directory.delete(recursive: true);
+        }
+      }
+      await output.flush();
+      await output.close();
+      final restoredSize = await temporal.length();
+      if (restoredSize != manifest.size) {
+        throw StateError(
+          'Molde restaurado incompleto ($restoredSize/${manifest.size} bytes)',
+        );
+      }
+      await temporal.rename(destination.path);
+    } catch (_) {
+      await output.close();
+      if (await temporal.exists()) await temporal.delete();
+      rethrow;
+    }
+  }
+
   Future<void> borrarMensajes({
     required String token,
     required String chatId,

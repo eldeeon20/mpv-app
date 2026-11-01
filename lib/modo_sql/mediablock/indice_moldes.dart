@@ -200,6 +200,13 @@ extension IndiceMoldesExt on _MediaBlockScreenState {
           nombre: nombre,
         );
         if ('${teleMeta?['modo'] ?? ''}' == 'bot' &&
+            '${teleMeta?['sql_file_id'] ?? ''}'.isEmpty) {
+          throw StateError(
+            'indice.db no tiene el file_id de la SQL de "$nombre"; '
+            'restaurá el respaldo actualizado del índice.',
+          );
+        }
+        if ('${teleMeta?['modo'] ?? ''}' == 'bot' &&
             '${teleMeta?['sql_file_id'] ?? ''}'.isNotEmpty) {
           final accountId = '${teleMeta?['account_id'] ?? ''}';
           final account = accountId.isEmpty
@@ -219,6 +226,14 @@ extension IndiceMoldesExt on _MediaBlockScreenState {
               fileId: '${teleMeta?['sql_file_id']}',
               destination: downloaded,
             );
+            final sqlSizeEsperado = (teleMeta?['sql_size'] as int?) ?? 0;
+            if (sqlSizeEsperado > 0 &&
+                await downloaded.length() != sqlSizeEsperado) {
+              throw StateError(
+                'SQL de Telegram incompleta '
+                '($sqlSizeEsperado bytes esperados)',
+              );
+            }
             final remoteSql = CajaSql();
             await remoteSql.abrirRuta(downloaded.path, clave: pass);
             remoteSql.cerrar();

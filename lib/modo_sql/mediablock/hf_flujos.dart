@@ -6,11 +6,12 @@ extension HfFlujosExt on _MediaBlockScreenState {
   /// lo que ya está arriba). Log por molde + resumen.
   Future<void> _subirSeleccionados() async {
     if (_hfOcupado || _selSubir.isEmpty) return;
+    final nombres = _selSubir.toList()..sort();
     final cuenta = await _elegirCuentaNube('huggingface');
     if (cuenta == null || !mounted) return;
     setState(() => _hfOcupado = true);
     try {
-      for (final nombre in _selSubir) {
+      for (final nombre in nombres) {
         await Indice.guardarHf(
           pass: await _passIndice(),
           nombre: nombre,
@@ -21,13 +22,15 @@ extension HfFlujosExt on _MediaBlockScreenState {
       final r = await _puenteHf.subirSeleccionados(
         passIndice: await _passIndice(),
         claveSql: _clave,
-        nombres: _selSubir.toList(),
-        conIndice: _hfConIndice,
+        nombres: nombres,
+        conIndice: false,
         log: _add,
       );
       _add('✓ subida selección: ${r.subidos} subido(s), '
           '${r.saltados} ya estaban');
-      if (mounted) setState(() => _selSubir.clear());
+      if (mounted && r.completados.isNotEmpty) {
+        setState(() => _selSubir.removeAll(r.completados));
+      }
       await _refrescarMoldes();
     } catch (e) {
       _add('✗ subir selección: $e');
@@ -98,8 +101,8 @@ extension HfFlujosExt on _MediaBlockScreenState {
     }
   }
 
-  /// HF: sube .mld + SQL del molde abierto (+ índice solo si el
-  /// check "Subir índice junto" está puesto).
+  /// HF: sube .mld + SQL del molde abierto. El índice se respalda
+  /// por separado y solo cuando el usuario lo pide.
   Future<void> _hfSubir() async {
     if (_hfOcupado) return;
     final m = _infoAbierta?.nombre;
@@ -121,7 +124,7 @@ extension HfFlujosExt on _MediaBlockScreenState {
         passIndice: await _passIndice(),
         claveSql: _clave,
         nombre: m,
-        conIndice: _hfConIndice,
+        conIndice: false,
         log: _add,
       );
       if (mounted) setState(() {});
@@ -269,95 +272,302 @@ extension HfFlujosExt on _MediaBlockScreenState {
   }
 
   Future<void> _telegramBotSubirMolde() async {
-    final nombre = _infoAbierta?.nombre;
-    if (nombre == null) {
-      _add('· abrí el molde que querés subir por Bot API');
+    final nombres = _selSubir.toList()..sort();
+    if (nombres.isEmpty) {
+      _add('· seleccioná los moldes que querés subir');
       return;
     }
+    final seleccionados = _selSubir.toSet();
     final cuenta = await _elegirCuentaNube('telegram_bot');
     if (cuenta == null || !mounted) return;
     if (_telegramBotOcupado) return;
     setState(() => _telegramBotOcupado = true);
     try {
       final passIndice = await _passIndice();
-      final ent = await Indice.entrada(pass: passIndice, nombre: nombre);
-      if (ent == null) throw StateError('"$nombre" no está en index.db');
-      final rutaMld = '${ent['mld_ruta'] ?? ''}';
-      final archivo = File(rutaMld);
-      if (!await archivo.exists()) {
-        throw StateError('No hay .mld local para subir: $rutaMld');
+      var exitos = 0;
+      final subidos = <String>{};
+      for (final nombre in nombres) {
+        try {
+          await _telegramBotSubirUnMolde(
+            nombre: nombre,
+            passIndice: passIndice,
+            accountId: cuenta.id,
+            token: cuenta.token,
+            chatId: cuenta.destino,
+          );
+          exitos++;
+          subidos.add(nombre);
+        } catch (e) {
+          _add('✗ Telegram "$nombre": $e');
+        }
       }
-      _add('· subiendo "$nombre.mld" en partes de 17 MB; '
-          'el archivo ya está cifrado y no se vuelve a cifrar');
-      var ultimoProgreso = -1;
-      final manifest = await _telegramBot.subirMolde(
-        token: cuenta.token,
-        chatId: cuenta.destino,
-        ruta: rutaMld,
-        progreso: (subidos, total) {
-          final porcentaje = (100 * subidos / total).floor();
-          if (porcentaje ~/ 10 != ultimoProgreso ~/ 10) {
-            ultimoProgreso = porcentaje;
-            _add('· Bot API "$nombre": $porcentaje%');
-          }
-        },
-      );
-      final rutaManifiesto = await TelegramMldManifestStore.crear(
-        nombre: nombre,
-        clave: _clave,
-        manifest: manifest,
-      );
-      final subidaManifiesto = await _telegramBot.subirArchivo(
-        token: cuenta.token,
-        chatId: cuenta.destino,
-        ruta: rutaManifiesto.path,
-        nombre: '$nombre.hash.db',
-      );
-      final rutaSql = '${ent['db_ruta'] ?? ''}';
-      final archivoSql = File(rutaSql);
-      if (!await archivoSql.exists()) {
-        throw StateError('No existe la SQL cifrada del molde: $rutaSql');
+      _add('· Telegram: $exitos/${nombres.length} molde(s) subido(s)');
+      if (seleccionados.isNotEmpty && subidos.isNotEmpty && mounted) {
+        setState(() => _selSubir.removeAll(subidos));
       }
-      if (await archivoSql.length() >= 20 * 1000 * 1000) {
-        throw StateError(
-          'La SQL del molde supera el límite de descarga Bot API de 20 MB; '
-          'usá Hugging Face para este molde.',
-        );
-      }
-      final cajaSql = CajaSql();
-      await cajaSql.abrirRuta(rutaSql, clave: _clave);
-      cajaSql.cerrar();
-      final subidaSql = await _telegramBot.subirArchivo(
-        token: cuenta.token,
-        chatId: cuenta.destino,
-        ruta: rutaSql,
-        nombre: '$nombre.sql.db',
-      );
-      await Indice.guardarManifiestoTelegram(
-        pass: passIndice,
-        nombre: nombre,
-        accountId: cuenta.id,
-        chatId: cuenta.destino,
-        fileId: subidaManifiesto.fileId,
-        messageId: subidaManifiesto.messageId,
-        size: manifest.size,
-        sqlFileId: subidaSql.fileId,
-        sqlMessageId: subidaSql.messageId,
-        sqlSize: subidaSql.size,
-      );
-      _add('✓ "$nombre.mld" subido en ${manifest.parts.length} partes; '
-          'SQL cifrada y hash.db cifrado enlazados desde index.db');
-      await _refrescarMoldes();
-      if (_telegramUser.isReady) {
-        await _telegramPreguntarRespaldoIndice();
-      } else {
-        _add('⚠ index.db cambió. Conectá la cuenta Telegram personal para '
-            'respaldarlo en Mensajes guardados.');
+      if (exitos > 0) {
+        await _refrescarMoldes();
+        _add('· index.db local actualizado; sus respaldos en HF y Telegram '
+            'siguen siendo manuales e independientes');
       }
     } catch (e) {
       _add('✗ subir molde por Bot API: $e');
     } finally {
       if (mounted) setState(() => _telegramBotOcupado = false);
+    }
+  }
+
+  Future<void> _telegramBotSubirUnMolde({
+    required String nombre,
+    required String passIndice,
+    required String accountId,
+    required String token,
+    required String chatId,
+  }) async {
+    final ent = await Indice.entrada(pass: passIndice, nombre: nombre);
+    if (ent == null) throw StateError('"$nombre" no está en indice.db');
+    final claveMolde = _passPorMolde[nombre]?.isNotEmpty == true
+        ? _passPorMolde[nombre]!
+        : (nombre == _infoAbierta?.nombre ? _clave : '');
+    if (claveMolde.isEmpty) {
+      throw StateError('falta la clave de "$nombre" guardada en indice.db');
+    }
+
+    final rutaMld = '${ent['mld_ruta'] ?? ''}';
+    final archivoMld = File(rutaMld);
+    if (!await archivoMld.exists()) {
+      throw StateError('no hay .mld local para subir: $rutaMld');
+    }
+    final rutaSql = '${ent['db_ruta'] ?? ''}';
+    final archivoSql = File(rutaSql);
+    if (!await archivoSql.exists()) {
+      throw StateError('no existe la SQL cifrada: $rutaSql');
+    }
+    final sqlSize = await archivoSql.length();
+    if (sqlSize <= 0 || sqlSize >= 20 * 1000 * 1000) {
+      throw StateError(
+        'la SQL cifrada debe pesar menos de 20 MB para descargarla con Bot API',
+      );
+    }
+    final cajaSql = CajaSql();
+    try {
+      await cajaSql.abrirRuta(rutaSql, clave: claveMolde);
+    } finally {
+      cajaSql.cerrar();
+    }
+
+    _add('· subiendo "$nombre.mld" en partes de 19 MB; '
+        'el archivo ya está cifrado');
+    var ultimoProgreso = -1;
+    final manifest = await _telegramBot.subirMolde(
+      token: token,
+      chatId: chatId,
+      ruta: rutaMld,
+      progreso: (subidos, total) {
+        final porcentaje = (100 * subidos / total).floor();
+        if (porcentaje ~/ 10 != ultimoProgreso ~/ 10) {
+          ultimoProgreso = porcentaje;
+          _add('· Bot API "$nombre": $porcentaje%');
+        }
+      },
+    );
+    final rutaManifiesto = await TelegramMldManifestStore.crear(
+      nombre: nombre,
+      clave: claveMolde,
+      manifest: manifest,
+    );
+    final subidaManifiesto = await _telegramBot.subirArchivo(
+      token: token,
+      chatId: chatId,
+      ruta: rutaManifiesto.path,
+      nombre: '$nombre.hash.db',
+    );
+    final subidaSql = await _telegramBot.subirArchivo(
+      token: token,
+      chatId: chatId,
+      ruta: rutaSql,
+      nombre: '$nombre.sql.db',
+    );
+    await Indice.guardarManifiestoTelegram(
+      pass: passIndice,
+      nombre: nombre,
+      accountId: accountId,
+      chatId: chatId,
+      fileId: subidaManifiesto.fileId,
+      messageId: subidaManifiesto.messageId,
+      size: manifest.size,
+      sqlFileId: subidaSql.fileId,
+      sqlMessageId: subidaSql.messageId,
+      sqlSize: subidaSql.size,
+    );
+    _add('✓ "$nombre": .mld en ${manifest.parts.length} partes, '
+        'hash.db y SQL cifrada enlazados en indice.db');
+  }
+
+  Future<void> _telegramBotRestaurarSeleccion() async {
+    final nombres = _selSubir.toList()..sort();
+    if (nombres.isEmpty) {
+      _add('· seleccioná los moldes que querés recuperar');
+      return;
+    }
+    if (!mounted || _telegramBotOcupado) return;
+    setState(() => _telegramBotOcupado = true);
+    try {
+      final passIndice = await _passIndice();
+      var recuperados = 0;
+      for (final nombre in nombres) {
+        try {
+          await _telegramBotRestaurarUno(
+            nombre: nombre,
+            passIndice: passIndice,
+          );
+          recuperados++;
+        } catch (e) {
+          _add('✗ recuperar "$nombre" de Telegram: $e');
+        }
+      }
+      _add('· Telegram: $recuperados/${nombres.length} molde(s) recuperado(s)');
+      if (recuperados > 0) await _refrescarMoldes();
+    } catch (e) {
+      _add('✗ recuperar selección de Telegram: $e');
+    } finally {
+      if (mounted) setState(() => _telegramBotOcupado = false);
+    }
+  }
+
+  Future<void> _telegramBotRestaurarUno({
+    required String nombre,
+    required String passIndice,
+  }) async {
+    final ent = await Indice.entrada(pass: passIndice, nombre: nombre);
+    if (ent == null) throw StateError('"$nombre" no está en indice.db');
+    final meta = await Indice.manifiestoTelegram(
+      pass: passIndice,
+      nombre: nombre,
+    );
+    if ('${meta?['modo'] ?? ''}' != 'bot') {
+      throw StateError('indice.db no tiene un respaldo Bot API de "$nombre"');
+    }
+    final accountId = '${meta?['account_id'] ?? ''}';
+    final account = accountId.isEmpty
+        ? null
+        : await Indice.cuentaNube(pass: passIndice, id: accountId);
+    final config = account == null
+        ? await Indice.botTelegram(passIndice)
+        : (token: account.token, chatId: account.destino);
+    if (config.token.isEmpty) {
+      throw StateError(
+        'no está la cuenta Telegram que subió "$nombre"; '
+        'restaurá el indice.db correcto o volvé a registrar esa cuenta',
+      );
+    }
+    final claveMolde = _passPorMolde[nombre]?.isNotEmpty == true
+        ? _passPorMolde[nombre]!
+        : (nombre == _infoAbierta?.nombre ? _clave : '');
+    if (claveMolde.isEmpty) {
+      throw StateError('falta la clave de "$nombre" guardada en indice.db');
+    }
+    final mldSize = (meta?['mld_size'] as int?) ?? 0;
+    if (mldSize <= 0) {
+      throw StateError(
+          'indice.db no tiene el tamaño del respaldo de "$nombre"');
+    }
+
+    final tempDir = await Directory.systemTemp.createTemp('tg_mld_restore_');
+    try {
+      final rutaSqlIndice = '${ent['db_ruta'] ?? ''}';
+      final sqlDestino = rutaSqlIndice.isNotEmpty
+          ? File(rutaSqlIndice)
+          : File(await CreateMoldeSql.rutaDbPropia(nombre));
+      if (await sqlDestino.exists()) {
+        final sqlLocal = CajaSql();
+        try {
+          await sqlLocal.abrirRuta(sqlDestino.path, clave: claveMolde);
+        } finally {
+          sqlLocal.cerrar();
+        }
+      } else {
+        final sqlFileId = '${meta?['sql_file_id'] ?? ''}';
+        if (sqlFileId.isEmpty) {
+          throw StateError(
+            'indice.db no tiene el file_id de la SQL de "$nombre"',
+          );
+        }
+        final sqlTemporal = File(
+          '${tempDir.path}${Platform.pathSeparator}$nombre.sql.db',
+        );
+        await _telegramBot.descargarArchivo(
+          token: config.token,
+          fileId: sqlFileId,
+          destination: sqlTemporal,
+        );
+        final sqlSize = (meta?['sql_size'] as int?) ?? 0;
+        if (sqlSize > 0 && await sqlTemporal.length() != sqlSize) {
+          throw StateError('SQL descargada incompleta para "$nombre"');
+        }
+        final sqlRemota = CajaSql();
+        try {
+          await sqlRemota.abrirRuta(sqlTemporal.path, clave: claveMolde);
+        } finally {
+          sqlRemota.cerrar();
+        }
+        await sqlDestino.parent.create(recursive: true);
+        await sqlTemporal.copy(sqlDestino.path);
+        await Indice.actualizarRutas(
+          pass: passIndice,
+          nombre: nombre,
+          dbRuta: sqlDestino.path,
+          mldRuta: '${ent['mld_ruta'] ?? ''}',
+        );
+        _add('✓ SQL de "$nombre" recuperada y validada; ahora se descarga '
+            'el molde');
+      }
+
+      final fileId = '${meta?['manifest_file_id'] ?? ''}';
+      if (fileId.isEmpty) {
+        throw StateError('indice.db no tiene el file_id de "$nombre.hash.db"');
+      }
+      final hashDb = File(
+        '${tempDir.path}${Platform.pathSeparator}$nombre.hash.db',
+      );
+      await _telegramBot.descargarArchivo(
+        token: config.token,
+        fileId: fileId,
+        destination: hashDb,
+      );
+      final manifest = await TelegramMldManifestStore.leer(
+        ruta: hashDb.path,
+        clave: claveMolde,
+      );
+      if (manifest.size != mldSize) {
+        throw StateError('hash.db no coincide con indice.db');
+      }
+
+      final rutaIndice = '${ent['mld_ruta'] ?? ''}';
+      final destino = rutaIndice.isNotEmpty
+          ? File(rutaIndice)
+          : await MediaBase.archivoMolde(nombre);
+      if (!await destino.exists()) {
+        await _telegramBot.restaurarMolde(
+          token: config.token,
+          manifest: manifest,
+          destination: destino,
+        );
+      } else if (await destino.length() != manifest.size) {
+        throw StateError(
+          'ya existe un .mld distinto en ${destino.path}; no se sobrescribió',
+        );
+      }
+      await Indice.actualizarRutas(
+        pass: passIndice,
+        nombre: nombre,
+        dbRuta: sqlDestino.path,
+        mldRuta: destino.path,
+      );
+      _add('✓ "$nombre" recuperado desde Telegram (SQL + '
+          '${fmtBytes(manifest.size)} de .mld)');
+    } finally {
+      await tempDir.delete(recursive: true);
     }
   }
 
@@ -485,37 +695,6 @@ extension HfFlujosExt on _MediaBlockScreenState {
       await _refrescarMoldes();
     } catch (e) {
       _add('✗ restaurar index.db desde Telegram: $e');
-    }
-  }
-
-  Future<void> _telegramPreguntarRespaldoIndice() async {
-    if (!mounted) return;
-    final confirmar = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Respaldar index.db'),
-        content: const Text(
-          'El catálogo cambió. ¿Subir ahora index.db ya cifrado a '
-          'Mensajes guardados de tu cuenta Telegram personal? '
-          'No se vuelve a cifrar.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Después'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Respaldar ahora'),
-          ),
-        ],
-      ),
-    );
-    if (confirmar == true) {
-      await _telegramSubirIndice();
-    } else {
-      _add(
-          '⚠ index.db quedó actualizado localmente; respaldo de Telegram pendiente');
     }
   }
 }

@@ -152,7 +152,6 @@ class _MediaBlockScreenState extends State<MediaBlockScreen>
 
   /// HF: si va con tilde, subir molde(s) sube el índice junto
   /// (respaldo en el repo del molde). Sin tilde, no sube.
-  bool _hfConIndice = true;
 
   /// ---- estado (vive acá; la lógica está en mediablock/) ----
   /// Zona: previas/unos en RAM (ver mediablock/estado_previas.dart).
@@ -870,6 +869,27 @@ class _MediaBlockScreenState extends State<MediaBlockScreen>
           label: const Text('Indexar carpeta…'),
         ),
         const SizedBox(height: 6),
+        const Text(
+          'index.db global (respaldo opcional; restauración manual)',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 8,
+          children: [
+            FilledButton.tonalIcon(
+              onPressed: _hfOcupado ? null : _hfBajarIndice,
+              icon: const Icon(Icons.cloud_download_rounded, size: 18),
+              label: const Text('Bajar índice de Hugging Face'),
+            ),
+            FilledButton.tonalIcon(
+              onPressed: _telegramUser.isReady ? _telegramBajarIndice : null,
+              icon: const Icon(Icons.restore_rounded, size: 18),
+              label: const Text('Restaurar índice de Telegram'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
         campoTexto(_filtroMoldesCtrl, 'buscar molde o carpeta…',
             onChanged: (_) {
           if (mounted) setState(() {});
@@ -878,22 +898,42 @@ class _MediaBlockScreenState extends State<MediaBlockScreen>
         // salta lo que ya está arriba.
         if (_selSubir.isNotEmpty) ...[
           const SizedBox(height: 6),
-          Row(children: [
-            Expanded(
-              child: Text('${_selSubir.length} elegido(s)',
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('${_selSubir.length} elegido(s)',
                   style: const TextStyle(
                       fontSize: 12, fontWeight: FontWeight.bold)),
-            ),
-            TextButton(
-              onPressed: () => setState(() => _selSubir.clear()),
-              child: const Text('Limpiar'),
-            ),
-            FilledButton.icon(
-              onPressed: _hfOcupado ? null : _subirSeleccionados,
-              icon: const Icon(Icons.cloud_upload_rounded, size: 18),
-              label: const Text('Subir'),
-            ),
-          ]),
+              Wrap(
+                spacing: 6,
+                children: [
+                  TextButton(
+                    onPressed: () => setState(() => _selSubir.clear()),
+                    child: const Text('Limpiar'),
+                  ),
+                  FilledButton.icon(
+                    onPressed: _hfOcupado ? null : _subirSeleccionados,
+                    icon: const Icon(Icons.cloud_upload_rounded, size: 18),
+                    label: const Text('Subir a HF'),
+                  ),
+                  FilledButton.tonalIcon(
+                    onPressed:
+                        _telegramBotOcupado ? null : _telegramBotSubirMolde,
+                    icon: const Icon(Icons.send_rounded, size: 18),
+                    label: const Text('Subir a Telegram'),
+                  ),
+                  FilledButton.tonalIcon(
+                    onPressed: _telegramBotOcupado
+                        ? null
+                        : _telegramBotRestaurarSeleccion,
+                    icon: const Icon(Icons.download_rounded, size: 18),
+                    label:
+                        const Text('Recuperar automáticamente (SQL + molde)'),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ],
         const SizedBox(height: 6),
         ListaMoldes(
@@ -921,26 +961,13 @@ class _MediaBlockScreenState extends State<MediaBlockScreen>
           }),
         ),
         const Divider(height: 20),
-        const Text('Subida del molde abierto',
+        const Text('Subida a Hugging Face',
             style: TextStyle(fontWeight: FontWeight.bold)),
-        CheckboxListTile(
-          dense: true,
-          contentPadding: EdgeInsets.zero,
-          title: const Text('Subir índice junto al molde',
-              style: TextStyle(fontSize: 12)),
-          value: _hfConIndice,
-          onChanged: (v) => setState(() => _hfConIndice = v ?? true),
-        ),
         Wrap(spacing: 8, children: [
           FilledButton.tonalIcon(
             onPressed: _hfOcupado ? null : _hfSubir,
             icon: const Icon(Icons.cloud_upload_rounded, size: 18),
             label: const Text('Subir a Hugging Face'),
-          ),
-          FilledButton.tonalIcon(
-            onPressed: _telegramBotOcupado ? null : _telegramBotSubirMolde,
-            icon: const Icon(Icons.send_rounded, size: 18),
-            label: const Text('Subir a Telegram Bot'),
           ),
           FilledButton.tonalIcon(
             onPressed: _hfOcupado ? null : _hfBajarSql,
@@ -968,11 +995,6 @@ class _MediaBlockScreenState extends State<MediaBlockScreen>
             onPressed: _hfOcupado ? null : _hfSubirIndice,
             icon: const Icon(Icons.cloud_upload_rounded, size: 18),
             label: const Text('Subir índice'),
-          ),
-          FilledButton.tonalIcon(
-            onPressed: _hfOcupado ? null : _hfBajarIndice,
-            icon: const Icon(Icons.cloud_download_rounded, size: 18),
-            label: const Text('Bajar índice'),
           ),
         ]),
         const SizedBox(height: 6),

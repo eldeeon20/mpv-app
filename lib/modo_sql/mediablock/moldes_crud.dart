@@ -369,6 +369,12 @@ extension MoldesCrudExt on _MediaBlockScreenState {
         CreateMoldeSql.remoto = null;
         _add('⚠ remoto Bot API no disponible: $e');
       }
+      if (m == null && CreateMoldeSql.remoto == null) {
+        _add('⚠ "$nombre" no tiene .mld local ni una copia remota configurada. '
+            'Si la copia está en Telegram, restaurá el respaldo actualizado '
+            'de indice.db desde Mensajes guardados; el Bot no puede buscar '
+            'archivos sin los file_id guardados en ese índice.');
+      }
       if (!mounted) return;
       // Caché en bruto sobre la sesión (misma pass del índice).
       final TrozoCache? cache = _sesionCache.abierta
