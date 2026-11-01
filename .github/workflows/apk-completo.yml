@@ -1,0 +1,195 @@
+name: apk-completo
+
+# Rust (.so) + APK en un solo workflow, sin depender de rust-lib/build-app.
+# Genera: pr_app-debug.apk / pr_app-release.apk como artefacto.
+on:
+  workflow_dispatch:
+    inputs:
+      modo:
+        description: 'release | debug | profile'
+        required: false
+        default: 'release'
+
+permissions:
+  contents: read
+
+env:
+  RUST_PREBUILT: '1'
+
+jobs:
+  apk:
+    name: rust .so + apk (${{ github.event.inputs.modo || 'release' }})
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android/sdk/emulator
+          sudo rm -rf /opt/hostedtoolcache
+          sudo rm -rf /usr/local/share/boost
+          df -h
+
+      - uses: actions/checkout@v5
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      # ------------------------------------------------------------- caches
+      - name: Cache Dart pub packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.pub-cache
+          key: pub-apkfull-${{ runner.os }}-${{ hashFiles('pubspec.yaml') }}
+          restore-keys: pub-apkfull-${{ runner.os }}-
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-apkfull-${{ runner.os }}-${{ hashFiles('rust/Cargo.toml') }}
+          restore-keys: cargo-apkfull-${{ runner.os }}-
+
+      - name: Cache cargo bin
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin
+          key: cargo-bin-apkfull-${{ runner.os }}-v1
+
+      - name: Cache Android NDK
+        id: ndk-cache
+        uses: actions/cache@v5
+        with:
+          path: /usr/local/lib/android/sdk/ndk/27.0.12077973
+          key: ndk-27.0.12077973-apkfull-v1
+
+      - name: Install NDK 27
+        if: steps.ndk-cache.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          SDKMANAGER=$(ls /usr/local/lib/android/sdk/cmdline-tools/*/bin/sdkmanager | head -1)
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "ndk;27.0.12077973" >/dev/null 2>&1
+          test -d "${ANDROID_HOME:-/usr/local/lib/android/sdk}/ndk/27.0.12077973"
+
+      # ------------------------------------------------------------- codegen
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: Install flutter_rust_bridge_codegen
+        run: |
+          if ! command -v flutter_rust_bridge_codegen >/dev/null 2>&1; then
+            mkdir -p "$HOME/.local/bin"
+            curl -fsSL "https://github.com/fzyzcjy/flutter_rust_bridge/releases/download/v2.12.0/flutter_rust_bridge_codegen-x86_64-unknown-linux-gnu-v2.12.0.tgz" -o "$RUNNER_TEMP/frb.tgz"
+            tar -xzf "$RUNNER_TEMP/frb.tgz" -C "$HOME/.local/bin"
+            chmod +x "$HOME/.local/bin/flutter_rust_bridge_codegen"
+          fi
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install cargo-expand
+        run: |
+          if ! command -v cargo-expand > /dev/null 2>&1; then
+            cargo install cargo-expand
+          fi
+
+      - name: Preparar lib.rs para codegen
+        run: |
+          set -e
+          cp rust/src/lib.rs rust/src/lib.rs.bak
+          printf 'pub mod api;\npub mod gt;\n' > rust/src/lib.rs
+
+      - name: Regenerar bindings Dart <-> Rust
+        run: flutter_rust_bridge_codegen generate
+
+      - name: Restaurar lib.rs (con frb_generated)
+        run: mv rust/src/lib.rs.bak rust/src/lib.rs
+
+      # ------------------------------------------------------------- rust .so
+      - name: Install cargo-ndk
+        run: |
+          if ! command -v cargo-ndk >/dev/null 2>&1; then
+            cargo install cargo-ndk
+          fi
+
+      - name: Compilar Rust Android (release, arm64)
+        working-directory: rust
+        run: |
+          set -e
+          export ANDROID_NDK_HOME=$(ls -d ${ANDROID_HOME:-/usr/local/lib/android/sdk}/ndk/27.0.12077973)
+          export ANDROID_NDK_ROOT=$ANDROID_NDK_HOME
+          echo "NDK: $ANDROID_NDK_HOME"
+          cargo ndk -t arm64-v8a -P 26 build --release
+
+      - name: Copiar .so + libc++ al plugin Android
+        run: |
+          set -e
+          ABI=arm64-v8a
+          DEST=rust_builder/android/src/main/jniLibs/$ABI
+          mkdir -p "$DEST"
+          cp rust/target/aarch64-linux-android/release/librust_lib_pr_app.so "$DEST"/
+          NDK_ROOT=$(ls -d ${ANDROID_HOME:-/usr/local/lib/android/sdk}/ndk/27.* | head -1)
+          cp "$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "$DEST"/
+          ls -la "$DEST"
+          echo "--- alineación de páginas (debe ser 0x4000 en los LOAD) ---"
+          "$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -lW "$DEST/librust_lib_pr_app.so" | grep -E '^\s+LOAD' || true
+          echo "--- dependencias ---"
+          "$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -d "$DEST/librust_lib_pr_app.so" | grep NEEDED || true
+
+      # ------------------------------------------------------------- apk
+      - name: flutter analyze (informativo)
+        run: |
+          flutter analyze --no-fatal-infos --no-fatal-warnings || \
+            echo "::warning::analyze con issues (no bloquea el build)"
+
+      - name: flutter pub get (post-codegen)
+        run: flutter pub get
+
+      - name: Build APK
+        env:
+          MODO: ${{ github.event.inputs.modo || 'release' }}
+        run: |
+          set -e
+          case "$MODO" in
+            debug)   flutter build apk --debug   --target-platform android-arm64 ;;
+            profile) flutter build apk --profile --target-platform android-arm64 ;;
+            *)       flutter build apk --release --target-platform android-arm64 ;;
+          esac
+
+      - name: Verificar .so dentro del APK
+        run: |
+          set -e
+          APK=$(find build/app/outputs/flutter-apk -name '*.apk' | head -1)
+          echo "APK: $APK"
+          unzip -l "$APK" | grep -E "lib/arm64-v8a/librust_lib_pr_app\.so"
+          unzip -l "$APK" | grep -E "lib/arm64-v8a/libc\+\+_shared\.so"
+          rm -rf /tmp/apkcheck && mkdir -p /tmp/apkcheck
+          unzip -o -q "$APK" 'lib/arm64-v8a/*' -d /tmp/apkcheck
+          ls -la /tmp/apkcheck/lib/arm64-v8a
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v5
+        with:
+          name: pr_app-apk-${{ github.event.inputs.modo || 'release' }}
+          path: build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Subir el .so suelto (para inspección)
+        uses: actions/upload-artifact@v5
+        with:
+          name: rust-so-arm64
+          path: rust_builder/android/src/main/jniLibs/arm64-v8a/*.so
+          if-no-files-found: error
+          retention-days: 7
