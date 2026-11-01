@@ -1,5 +1,8 @@
-# Android 15+ / dispositivos con páginas de 16 KB: sin estos flags el .so
-# se rechaza al dlopen ("has invalid ELF alignment").
+# Android aarch64.
+# - 16 KB de página (Android 15+): sin esto el .so se rechaza al dlopen
+#   ("has invalid ELF alignment").
+# La libc++ compartida NO va en DT_NEEDED: se carga antes desde MainActivity
+# con System.loadLibrary("c++_shared"), que la deja en el scope global.
 [target.aarch64-linux-android]
 rustflags = [
   "-C", "link-arg=-Wl,-z,max-page-size=16384",
