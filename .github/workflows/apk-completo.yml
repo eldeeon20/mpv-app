@@ -146,6 +146,13 @@ jobs:
           "$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -lW "$DEST/librust_lib_pr_app.so" | grep -E '^\s+LOAD' || true
           echo "--- dependencias ---"
           "$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -d "$DEST/librust_lib_pr_app.so" | grep NEEDED || true
+          # Sin DT_NEEDED libc++_shared.so el APK instala pero muere al abrir
+          # (dlopen: cannot locate symbol _ZTISt12length_error).
+          if ! "$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -d "$DEST/librust_lib_pr_app.so" | grep -q 'Shared library: \[libc++_shared.so\]'; then
+            echo "::error::la .so NO declara libc++_shared.so en DT_NEEDED"
+            exit 1
+          fi
+          echo "OK: libc++_shared.so en DT_NEEDED"
 
       # ------------------------------------------------------------- apk
       - name: flutter analyze (informativo)

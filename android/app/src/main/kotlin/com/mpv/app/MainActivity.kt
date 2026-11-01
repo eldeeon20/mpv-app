@@ -6,20 +6,6 @@ import android.view.WindowManager
 import com.ryanheise.audioservice.AudioServiceActivity
 
 class MainActivity : AudioServiceActivity() {
-    companion object {
-        init {
-            // librust_lib_pr_app.so referencia símbolos de libc++
-            // (p.ej. _ZTISt12length_error) sin declararla en DT_NEEDED:
-            // si no está cargada antes, dlopen falla con
-            // "cannot locate symbol _ZTISt12length_error".
-            try {
-                System.loadLibrary("c++_shared")
-            } catch (e: Throwable) {
-                android.util.Log.e("MainActivity", "c++_shared: $e")
-            }
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Dibujar también en la zona del notch/punch-hole (evita franja negra)

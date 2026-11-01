@@ -1,10 +1,16 @@
 # Android aarch64.
 # - 16 KB de página (Android 15+): sin esto el .so se rechaza al dlopen
 #   ("has invalid ELF alignment").
-# La libc++ compartida NO va en DT_NEEDED: se carga antes desde MainActivity
-# con System.loadLibrary("c++_shared"), que la deja en el scope global.
+# - libc++ compartida en DT_NEEDED: el .so usa símbolos de libc++
+#   (_ZTISt12length_error, __cxa_*...) que aporta el C++ de unrar y Android
+#   no los trae en el sistema. Sin NEEDED el APK instala pero muere al abrir
+#   con "dlopen failed: cannot locate symbol _ZTISt12length_error".
+#   --no-as-needed evita que el linker descarte la -l.
+# (Lo mismo se emite desde rust/build.rs, que es lo que mira el target.)
 [target.aarch64-linux-android]
 rustflags = [
   "-C", "link-arg=-Wl,-z,max-page-size=16384",
   "-C", "link-arg=-Wl,-z,common-page-size=16384",
+  "-C", "link-arg=-Wl,--no-as-needed",
+  "-C", "link-arg=-lc++_shared",
 ]
